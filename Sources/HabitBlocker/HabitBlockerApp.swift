@@ -490,11 +490,10 @@ final class BlockerStore: ObservableObject {
             return
         }
 
-        if shouldBlock {
-            clearUnlockWait(silently: true)
-            performHostUpdate(shouldBlock: true)
-        } else {
-            beginUnlockWait()
+        clearUnlockWait()
+        performHostUpdate(shouldBlock: shouldBlock) { [weak self] succeeded in
+            guard let self, succeeded else { return }
+            self.setStatus(shouldBlock ? "등록 사이트 차단을 켰습니다." : "등록 사이트 차단을 해제했습니다.", error: false)
         }
     }
 
@@ -515,7 +514,7 @@ final class BlockerStore: ObservableObject {
     }
 
     func cancelUnlockWait() {
-        clearUnlockWait(silently: true)
+        clearUnlockWait()
         setStatus("차단 해제를 취소하고 집중을 이어갑니다.", error: false)
     }
 
@@ -528,7 +527,7 @@ final class BlockerStore: ObservableObject {
         performHostUpdate(shouldBlock: false) { [weak self] succeeded in
             guard let self, succeeded else { return }
             self.recordActivity(.unblocked)
-            self.clearUnlockWait(silently: true)
+            self.clearUnlockWait()
             self.setStatus("차단을 해제했습니다.", error: false)
         }
     }
@@ -577,7 +576,7 @@ final class BlockerStore: ObservableObject {
         if isBlocked {
             setStatus("현재 hosts 파일에 습관 차단기 규칙이 적용되어 있습니다.", error: false)
         } else {
-            clearUnlockWait(silently: true)
+            clearUnlockWait()
             setStatus("현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
         }
     }
@@ -652,7 +651,7 @@ final class BlockerStore: ObservableObject {
                 self.performHostUpdate(shouldBlock: false) { [weak self] succeeded in
                     guard let self, succeeded else { return }
                     self.recordActivity(.focusCompleted)
-                    self.clearUnlockWait(silently: true)
+                    self.clearUnlockWait()
                     self.setStatus("집중 시간이 끝나 차단을 해제했습니다.", error: false)
                 }
             }
@@ -687,14 +686,11 @@ final class BlockerStore: ObservableObject {
         }
     }
 
-    private func clearUnlockWait(silently: Bool) {
+    private func clearUnlockWait() {
         unlockWaitTask?.cancel()
         unlockWaitTask = nil
         unlockReadyAt = nil
         unlockSecondsRemaining = 0
-        if !silently {
-            setStatus("차단 해제 대기를 취소했습니다.", error: false)
-        }
     }
 
     private func recordActivity(_ kind: HabitActivityKind, minutes: Int? = nil) {
@@ -838,7 +834,7 @@ enum HostFileService {
 
     static func isManagedBlockActive() -> Bool {
         guard let content = try? String(contentsOfFile: hostsPath, encoding: .utf8) else { return false }
-        return content.contains(beginMarker) && content.contains(endMarker)
+        return content.range(of: beginMarker) != nil && content.range(of: endMarker) != nil
     }
 
     static func updateHosts(shouldBlock: Bool, domains: [String]) async throws {
@@ -931,11 +927,5 @@ enum HostFileError: LocalizedError {
         case let .commandFailed(message):
             return message.isEmpty ? "관리자 권한 요청이 취소되었거나 hosts 파일을 변경할 수 없습니다." : message
         }
-    }
-}
-
-extension String {
-    func contains(_ substring: String) -> Bool {
-        range(of: substring) != nil
     }
 }
