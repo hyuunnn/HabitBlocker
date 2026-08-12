@@ -33,6 +33,15 @@ open "/Users/hyun/Documents/url-chadan/Build/HabitBlocker.app"
 | 집중 시간을 끝내고 싶음 | 메뉴에서 **종료**를 선택한 뒤 해제 대기 과정을 완료합니다. 계속 집중하고 싶으면 **계속 차단** 또는 **해제 대기 취소**를 누릅니다. |
 | 앱을 다시 빌드하고 싶음 | 프로젝트 폴더에서 `./Scripts/build.sh`를 실행합니다. |
 
+## 개발 및 테스트
+
+소스는 앱 진입점, 메뉴 UI, 상태 관리, 도메인·활동 모델, hosts 규칙 처리로 나뉘어 있습니다. 앱 번들은 아래 스크립트로 다시 만들고, 관리자 권한 없이 실행되는 핵심 로직 테스트는 별도 스크립트로 확인할 수 있습니다.
+
+```zsh
+./Scripts/build.sh
+./Scripts/test.sh
+```
+
 ## 차단 방식과 한계
 
 이 도구는 네트워크 필터나 VPN을 설치하지 않고, macOS의 로컬 호스트 이름 매핑을 이용합니다. 따라서 일반적인 웹 브라우징 습관을 끊기 위한 **가벼운 마찰 장치**에 적합합니다. 다만 특정 앱의 자체 DNS, VPN, 프록시, 보안 DNS 설정 또는 이미 열려 있는 연결은 이 규칙을 우회하거나 즉시 반영되지 않을 수 있습니다. 강제성이 높은 자녀 보호·기업 보안·네트워크 정책 용도에는 적합하지 않습니다.
@@ -45,9 +54,14 @@ open "/Users/hyun/Documents/url-chadan/Build/HabitBlocker.app"
 
 | 경로 | 설명 |
 |---|---|
-| `Sources/HabitBlocker/HabitBlockerApp.swift` | SwiftUI 메뉴 막대 UI, 도메인 정규화, hosts 규칙 관리 코드입니다. |
-| `Resources/Info.plist` | 메뉴 막대 전용 실행(`LSUIElement`)과 앱 메타데이터입니다. |
-| `Scripts/build.sh` | 앱 번들 생성과 ad-hoc 서명을 수행하는 빌드 스크립트입니다. |
+| `Sources/HabitBlocker/HabitBlockerApp.swift` | 앱 진입점과 메뉴 막대 씬을 정의합니다. |
+| `Sources/HabitBlocker/MenuContentView.swift` | 메뉴 팝오버 UI와 화면 구성 요소를 정의합니다. |
+| `Sources/HabitBlocker/BlockerStore.swift` | 차단 상태, 집중 세션, 통계, 알림을 관리합니다. |
+| `Sources/HabitBlocker/Models.swift` | 도메인 정규화와 로컬 활동 기록 모델을 정의합니다. |
+| `Sources/HabitBlocker/HostFileService.swift` | hosts 규칙 생성·제거와 관리자 권한 처리를 담당합니다. |
+| `Tests/HabitBlockerCoreTests.swift` | 도메인 처리와 hosts 규칙 생성·제거를 검증합니다. |
+| `Scripts/build.sh` | 앱 번들 생성과 ad-hoc 서명을 수행합니다. |
+| `Scripts/test.sh` | 핵심 로직 자동 테스트를 컴파일하고 실행합니다. |
 | `Build/HabitBlocker.app` | 바로 실행할 수 있는 생성 결과입니다. |
 
 ## 참고 자료

@@ -16,7 +16,7 @@ swiftc \
   -framework SwiftUI \
   -framework ServiceManagement \
   -o "$MACOS_DIR/HabitBlocker" \
-  "$ROOT_DIR/Sources/HabitBlocker/HabitBlockerApp.swift"
+  "$ROOT_DIR"/Sources/HabitBlocker/*.swift
 
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 codesign --force --deep --sign - "$APP_DIR" >/dev/null
