@@ -23,8 +23,8 @@ This project was built with **Manus 1.6** through a vibe-coding workflow: the pr
 Clone this repository, make the scripts executable, run the core tests, build the app bundle, and open it.
 
 ```zsh
-git clone https://github.com/hyuunnn/url-chadan.git
-cd url-chadan
+git clone https://github.com/hyuunnn/HabitBlocker.git
+cd HabitBlocker
 
 chmod +x Scripts/build.sh Scripts/test.sh
 ./Scripts/test.sh
@@ -47,6 +47,12 @@ The app appears as a shield icon in the macOS menu bar. Click the icon to open t
 | 5 | When ending a focus session, complete the configured unlock wait before confirming the final unblock. |
 
 The standard block toggle is intentionally immediate. The unlock wait applies only when ending a focus session.
+
+## Usage Flow
+
+![HabitBlocker usage flow](Assets/habitblocker-usage-flow.png)
+
+*Illustrative usage-flow mockup: add a domain, enable blocking or begin a focus session, then complete the deliberate unlock step when ending that session.*
 
 ## Features
 
@@ -93,6 +99,7 @@ The core test suite covers the logic that can be safely verified without adminis
 | `Tests/HabitBlockerCoreTests.swift` | Deterministic core-logic tests. |
 | `Scripts/build.sh` | Build and ad-hoc signing script. |
 | `Scripts/test.sh` | Core-test build and execution script. |
+| `Assets/habitblocker-usage-flow.png` | Usage-flow visual shown in both README files. |
 
 ## Blocking Method and Limitations
 

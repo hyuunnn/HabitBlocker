@@ -23,8 +23,8 @@
 저장소를 복제한 뒤 스크립트 실행 권한을 부여하고, 핵심 테스트와 앱 빌드를 실행한 다음 앱을 엽니다.
 
 ```zsh
-git clone https://github.com/hyuunnn/url-chadan.git
-cd url-chadan
+git clone https://github.com/hyuunnn/HabitBlocker.git
+cd HabitBlocker
 
 chmod +x Scripts/build.sh Scripts/test.sh
 ./Scripts/test.sh
@@ -47,6 +47,12 @@ open Build/HabitBlocker.app
 | 5 | 집중 세션을 끝낼 때는 설정한 해제 대기 시간이 지난 뒤 최종 해제를 확인합니다. |
 
 일반 차단 토글은 즉시 반영되며, 해제 대기는 **집중 세션 종료에만** 적용됩니다.
+
+## 사용 흐름
+
+![HabitBlocker 사용 흐름](Assets/habitblocker-usage-flow.png)
+
+*사용 흐름 예시 이미지입니다. 도메인을 추가하고, 즉시 차단 또는 집중 세션을 시작한 뒤, 세션 종료 시 해제 대기 단계를 완료합니다.*
 
 ## 주요 기능
 
@@ -93,6 +99,7 @@ open Build/HabitBlocker.app
 | `Tests/HabitBlockerCoreTests.swift` | 결정론적 핵심 로직 테스트 |
 | `Scripts/build.sh` | 앱 빌드와 ad-hoc 서명 스크립트 |
 | `Scripts/test.sh` | 핵심 테스트 빌드·실행 스크립트 |
+| `Assets/habitblocker-usage-flow.png` | 두 README에 표시되는 사용 흐름 이미지 |
 
 ## 차단 방식과 한계
 
