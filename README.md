@@ -1,72 +1,113 @@
-# 습관 차단기
+# HabitBlocker
 
-**습관 차단기**는 macOS 메뉴 막대에서 차단할 사이트를 관리하고, 필요할 때 즉시 차단하거나 집중 세션을 시작할 수 있는 개인용 도구입니다. 예를 들어 `youtube.com` 또는 특정 유튜브 영상 링크를 추가하면, 앱이 도메인을 추출해 유튜브 접속을 차단합니다.
+> A macOS menu bar utility that adds friction to habitual website visits by blocking selected domains during focused work.
 
-> 이 앱은 차단 규칙을 `/etc/hosts` 파일의 전용 구역에만 기록합니다. 규칙을 적용하거나 해제할 때 macOS 관리자 암호가 필요하며, 앱은 그 외의 기존 hosts 항목을 보존하도록 설계되었습니다.
+**HabitBlocker** lets you add domains or URLs such as `youtube.com` or a YouTube video URL, then control blocking from the macOS menu bar. It supports quick and custom focus sessions, a deliberate unlock wait for focus sessions, local activity summaries, and optional focus notifications.
 
-| 항목 | 동작 |
+[한국어 안내 보기](README_ko.md)
+
+## Built with Manus 1.6
+
+This project was built with **Manus 1.6** through a vibe-coding workflow: the product flow, SwiftUI menu bar interface, domain-blocking logic, refactoring, automated tests, and documentation were iteratively created and validated from a natural-language product brief.
+
+## Requirements
+
+| Requirement | Details |
 |---|---|
-| 메뉴 막대 제어 | 방패 아이콘을 눌러 차단 상태, 목록, 집중 세션을 한 곳에서 관리합니다. |
-| URL 입력 | `youtube.com`, `www.youtube.com`, `https://www.youtube.com/watch?v=…`처럼 도메인 또는 URL을 입력할 수 있습니다. |
-| 시스템 전체 차단 | 활성화하면 등록한 도메인을 `127.0.0.1` 및 `::1`에 연결해 브라우저와 대부분의 앱에서 접근을 막습니다. |
-| 유튜브 보완 규칙 | `youtube.com`을 등록하면 `www`, `m`, `music`, `studio` 하위 도메인과 `youtu.be`도 함께 처리합니다. |
-| 집중 세션 | 25·45·60분 빠른 선택 또는 1~1,440분 직접 입력으로 차단 시간을 정합니다. 앱이 실행 중이면 시간이 끝난 뒤 자동으로 해제합니다. |
-| 해제 대기 | 30초·1분·5분 중 해제 대기 시간을 정할 수 있습니다. **집중 세션을 종료할 때만** 해제 요청을 기록하고, 시간이 끝난 뒤 최종 해제를 다시 눌러야 합니다. |
-| 집중 안내 | 차단 중인 메뉴 화면에 집중 안내 문구를 표시하고, 집중 세션 시작 시 macOS 알림 권한이 허용된 경우 안내 알림을 보냅니다. |
-| 로컬 통계 | 집중 시작 횟수·설정한 집중 시간·해제 시도를 오늘 기준으로 요약합니다. 데이터는 이 Mac의 앱 설정에만 90일간 보관됩니다. |
-| 자동 실행 | 로그인 시 메뉴 막대 유틸리티를 자동 실행하도록 설정할 수 있습니다. |
+| Operating system | macOS 13 or later |
+| Build tools | Xcode or Xcode Command Line Tools with Swift |
+| Permissions | An administrator password is required only when applying or removing system-wide blocking rules. |
 
-## 실행 방법
+## Clone, Build, Test, and Run
 
-프로젝트 폴더의 다음 앱을 Finder에서 이중 클릭하거나 터미널에서 열면 됩니다.
+Clone this repository, make the scripts executable, run the core tests, build the app bundle, and open it.
 
 ```zsh
-open "/Users/hyun/Documents/url-chadan/Build/HabitBlocker.app"
-```
+git clone https://github.com/hyuunnn/url-chadan.git
+cd url-chadan
 
-처음 실행하면 화면 상단 메뉴 막대에 방패 아이콘이 나타납니다. 아이콘을 눌러 `youtube.com`을 입력하고 **등록 사이트 차단**을 켜세요. macOS가 관리자 인증을 요청하면 본인의 암호로 승인해야 실제 시스템 차단 규칙이 적용됩니다.
-
-| 상황 | 할 일 |
-|---|---|
-| 사이트를 새로 추가·삭제함 | 차단 중일 때는 **목록 변경사항 적용**을 눌러 hosts 규칙을 다시 반영합니다. |
-| 차단을 잠시 멈추고 싶음 | **등록 사이트 차단** 스위치를 끕니다. 이 토글은 즉시 반영되며 해제 대기 카운트가 적용되지 않습니다. |
-| 집중 시간을 끝내고 싶음 | 메뉴에서 **종료**를 선택한 뒤 해제 대기 과정을 완료합니다. 계속 집중하고 싶으면 **계속 차단** 또는 **해제 대기 취소**를 누릅니다. |
-| 앱을 다시 빌드하고 싶음 | 프로젝트 폴더에서 `./Scripts/build.sh`를 실행합니다. |
-
-## 개발 및 테스트
-
-소스는 앱 진입점, 메뉴 UI, 상태 관리, 도메인·활동 모델, hosts 규칙 처리로 나뉘어 있습니다. 앱 번들은 아래 스크립트로 다시 만들고, 관리자 권한 없이 실행되는 핵심 로직 테스트는 별도 스크립트로 확인할 수 있습니다.
-
-```zsh
-./Scripts/build.sh
+chmod +x Scripts/build.sh Scripts/test.sh
 ./Scripts/test.sh
+./Scripts/build.sh
+open Build/HabitBlocker.app
 ```
 
-## 차단 방식과 한계
+The app appears as a shield icon in the macOS menu bar. Click the icon to open the popover.
 
-이 도구는 네트워크 필터나 VPN을 설치하지 않고, macOS의 로컬 호스트 이름 매핑을 이용합니다. 따라서 일반적인 웹 브라우징 습관을 끊기 위한 **가벼운 마찰 장치**에 적합합니다. 다만 특정 앱의 자체 DNS, VPN, 프록시, 보안 DNS 설정 또는 이미 열려 있는 연결은 이 규칙을 우회하거나 즉시 반영되지 않을 수 있습니다. 강제성이 높은 자녀 보호·기업 보안·네트워크 정책 용도에는 적합하지 않습니다.
+> On the first change to a blocking rule, macOS asks for an administrator password because HabitBlocker updates only its own managed section of `/etc/hosts`.
 
-도메인 차단은 개별 영상 주소가 아니라 사이트 단위입니다. 즉 `https://www.youtube.com/watch?v=...`를 등록하면 해당 영상 하나가 아니라 YouTube 접속 전반을 막습니다. 이는 “특정 영상만 막기”보다 반복적으로 사이트를 여는 습관을 줄이는 목적에 맞춘 설계입니다.
+## How to Use
 
-브라우저 확장 기능을 사용하지 않으므로 앱은 웹페이지를 열려는 실제 URL을 읽거나 브라우저 안에 맞춤 차단 페이지를 삽입하지 않습니다. 대신 이 버전의 **해제 시도 기록**은 사용자가 앱에서 차단 해제를 요청한 시각을 기록하며, 집중 안내 메시지는 메뉴 막대 앱과 선택적 macOS 알림으로 표시됩니다.
-
-## 파일 구조
-
-| 경로 | 설명 |
+| Step | Action |
 |---|---|
-| `Sources/HabitBlocker/HabitBlockerApp.swift` | 앱 진입점과 메뉴 막대 씬을 정의합니다. |
-| `Sources/HabitBlocker/MenuContentView.swift` | 메뉴 팝오버 UI와 화면 구성 요소를 정의합니다. |
-| `Sources/HabitBlocker/BlockerStore.swift` | 차단 상태, 집중 세션, 통계, 알림을 관리합니다. |
-| `Sources/HabitBlocker/Models.swift` | 도메인 정규화와 로컬 활동 기록 모델을 정의합니다. |
-| `Sources/HabitBlocker/HostFileService.swift` | hosts 규칙 생성·제거와 관리자 권한 처리를 담당합니다. |
-| `Tests/HabitBlockerCoreTests.swift` | 도메인 처리와 hosts 규칙 생성·제거를 검증합니다. |
-| `Scripts/build.sh` | 앱 번들 생성과 ad-hoc 서명을 수행합니다. |
-| `Scripts/test.sh` | 핵심 로직 자동 테스트를 컴파일하고 실행합니다. |
-| `Build/HabitBlocker.app` | 바로 실행할 수 있는 생성 결과입니다. |
+| 1 | Open the shield icon in the menu bar. |
+| 2 | Add a domain like `youtube.com` or paste a full URL in **Blocked Sites**. |
+| 3 | Turn **Block Registered Sites** on to apply the rule immediately. Turn it off to remove the rule immediately. |
+| 4 | Start a focus session with a quick preset or a custom duration from 1 to 1,440 minutes. |
+| 5 | When ending a focus session, complete the configured unlock wait before confirming the final unblock. |
 
-## 참고 자료
+The standard block toggle is intentionally immediate. The unlock wait applies only when ending a focus session.
 
-Apple은 `MenuBarExtra`를 메뉴 막대에 지속적으로 표시되는 제어 요소를 만드는 SwiftUI 씬으로 제공하며, 메뉴 막대 전용 유틸리티에는 Dock과 앱 전환기에서 아이콘을 감추기 위해 `LSUIElement`를 사용할 수 있다고 안내합니다.[1] 또한 `MenuBarExtra`의 `window` 스타일은 표준 컨트롤을 담는 팝오버형 창을 표시하는 데 적합합니다.[2]
+## Features
+
+| Feature | Behavior |
+|---|---|
+| Menu bar control | Manage status, block lists, focus sessions, unlock waits, and summaries from a single SwiftUI popover. |
+| Domain and URL input | Accepts domain names and full URLs, extracting the host safely. |
+| System-wide hosts blocking | Maps selected domains to `127.0.0.1` and `::1` through a dedicated `/etc/hosts` section. |
+| YouTube expansion | Adding `youtube.com` also blocks `www`, `m`, `music`, `studio`, and `youtu.be`. |
+| Focus sessions | Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
+| Unlock wait | A 30-second, 1-minute, or 5-minute wait applies only to focus-session exits. |
+| Local summary | Shows today’s focus starts, planned focus minutes, and unlock attempts. Activity data stays on this Mac and is pruned after 90 days. |
+| Focus messages | Displays encouragement inside the app and can send a macOS notification when permission is granted. |
+| Launch at login | Uses the macOS login-item service to launch from the menu bar after sign-in. |
+
+## Development Commands
+
+| Command | Purpose |
+|---|---|
+| `./Scripts/test.sh` | Compiles and runs deterministic core tests without modifying `/etc/hosts`. |
+| `./Scripts/build.sh` | Creates and ad-hoc signs `Build/HabitBlocker.app`. |
+| `open Build/HabitBlocker.app` | Opens the locally built menu bar app. |
+
+## Automated Tests
+
+The core test suite covers the logic that can be safely verified without administrator access:
+
+| Area | Covered behavior |
+|---|---|
+| Domain normalization | URL host extraction, case normalization, and invalid-input rejection. |
+| Hostname expansion | Standard `www` aliases and YouTube-specific aliases. |
+| Managed-section removal | Preservation of unrelated hosts entries when HabitBlocker rules are removed. |
+| Desired hosts content | Replacement of old rules, creation of IPv4 and IPv6 entries, and clean unblocking. |
+
+## Project Structure
+
+| Path | Responsibility |
+|---|---|
+| `Sources/HabitBlocker/HabitBlockerApp.swift` | App entry point and menu bar scene. |
+| `Sources/HabitBlocker/MenuContentView.swift` | SwiftUI menu popover and visual components. |
+| `Sources/HabitBlocker/BlockerStore.swift` | Blocking state, focus sessions, summaries, notifications, and local persistence. |
+| `Sources/HabitBlocker/Models.swift` | Domain normalization plus blocking and activity data models. |
+| `Sources/HabitBlocker/HostFileService.swift` | Managed hosts-rule generation, removal, and privileged update handling. |
+| `Tests/HabitBlockerCoreTests.swift` | Deterministic core-logic tests. |
+| `Scripts/build.sh` | Build and ad-hoc signing script. |
+| `Scripts/test.sh` | Core-test build and execution script. |
+
+## Blocking Method and Limitations
+
+HabitBlocker is a lightweight behavior-change tool, not a security product. It uses a managed local hosts mapping instead of a VPN, proxy, browser extension, or network filter. This is intentionally simple and private, but it has limitations.
+
+| Limitation | Implication |
+|---|---|
+| Existing browser connections | A tab that was already open may continue temporarily because browsers can retain connections and DNS caches. Fully quit and reopen the browser to force a fresh connection. |
+| VPNs, proxies, or secure DNS | Some configurations or apps can bypass hosts-based resolution. |
+| Browser error page | HabitBlocker blocks the connection; it does not inject a custom in-browser block page. |
+| App not running | A focus timer is checked and reconciled the next time the app launches. Keep the menu bar app running for timely automatic completion. |
+
+Apple documents `MenuBarExtra` as a persistent menu bar control and notes that menu-bar-only utilities can use `LSUIElement` to remain out of the Dock and app switcher.[1] [2]
+
+## References
 
 [1]: https://developer.apple.com/documentation/swiftui/menubarextra "Apple Developer — MenuBarExtra"
 [2]: https://developer.apple.com/documentation/swiftui/menubarextrastyle "Apple Developer — MenuBarExtraStyle"
