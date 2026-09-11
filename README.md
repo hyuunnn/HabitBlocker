@@ -46,7 +46,7 @@ The standard block toggle is immediate. The unlock wait applies only when ending
 
 ## Usage Flow
 
-![HabitBlocker usage flow](Assets/habitblocker-usage-flow.png)
+![HabitBlocker usage flow](Assets/habitblocker-usage-flow-v2.png)
 
 *Usage flow based on the current menu: set the list, start a focus session, then complete the unlock wait when ending it.*
 
@@ -97,7 +97,7 @@ The core test suite covers the logic that can be safely verified without adminis
 | `Tests/HabitBlockerCoreTests.swift` | Deterministic core-logic tests. |
 | `Scripts/build.sh` | Build and ad-hoc signing script. |
 | `Scripts/test.sh` | Core-test build and execution script. |
-| `Assets/habitblocker-usage-flow.png` | Usage-flow visual shown in both README files. |
+| `Assets/habitblocker-usage-flow-v2.png` | Usage-flow visual shown in both README files. |
 
 ## Blocking Method and Limitations
 

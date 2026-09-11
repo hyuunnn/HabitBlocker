@@ -46,7 +46,7 @@ open Build/HabitBlocker.app
 
 ## 사용 흐름
 
-![HabitBlocker 사용 흐름](Assets/habitblocker-usage-flow.png)
+![HabitBlocker 사용 흐름](Assets/habitblocker-usage-flow-v2.png)
 
 *현재 메뉴 화면을 기준으로 한 사용 흐름입니다. 목록을 고르고, 집중을 시작한 뒤, 세션을 끝낼 때 해제 대기를 거칩니다.*
 
@@ -97,7 +97,7 @@ open Build/HabitBlocker.app
 | `Tests/HabitBlockerCoreTests.swift` | 결정론적 핵심 로직 테스트 |
 | `Scripts/build.sh` | 앱 빌드와 ad-hoc 서명 스크립트 |
 | `Scripts/test.sh` | 핵심 테스트 빌드·실행 스크립트 |
-| `Assets/habitblocker-usage-flow.png` | 두 README에 표시되는 사용 흐름 이미지 |
+| `Assets/habitblocker-usage-flow-v2.png` | 두 README에 표시되는 사용 흐름 이미지 |
 
 ## 차단 방식과 한계
 
