@@ -6,10 +6,6 @@
 
 [한국어 안내 보기](README_ko.md)
 
-## Built with Manus 1.6
-
-This project was built with **Manus 1.6** through a vibe-coding workflow: the product flow, SwiftUI menu bar interface, domain-blocking logic, refactoring, automated tests, and documentation were iteratively created and validated from a natural-language product brief.
-
 ## Requirements
 
 | Requirement | Details |
@@ -34,7 +30,7 @@ open Build/HabitBlocker.app
 
 The app appears as a shield icon in the macOS menu bar. Click the icon to open the popover.
 
-> On the first change to a blocking rule, macOS asks for an administrator password because HabitBlocker updates only its own managed section of `/etc/hosts`.
+> On the first blocking change, macOS asks for an administrator password. HabitBlocker changes the network proxy auto-configuration and does not modify `/etc/hosts`.
 
 ## How to Use
 
@@ -60,7 +56,7 @@ The standard block toggle is intentionally immediate. The unlock wait applies on
 |---|---|
 | Menu bar control | Manage status, block lists, focus sessions, unlock waits, and summaries from a single SwiftUI popover. |
 | Domain and URL input | Accepts domain names and full URLs, extracting the host safely. |
-| System-wide hosts blocking | Maps selected domains to `127.0.0.1` and `::1` through a dedicated `/etc/hosts` section. |
+| System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never reads or writes `/etc/hosts`. |
 | YouTube expansion | Adding `youtube.com` also blocks `www`, `m`, `music`, `studio`, and `youtu.be`. |
 | Focus sessions | Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
 | Unlock wait | A 30-second, 1-minute, or 5-minute wait applies only to focus-session exits. |
@@ -72,7 +68,7 @@ The standard block toggle is intentionally immediate. The unlock wait applies on
 
 | Command | Purpose |
 |---|---|
-| `./Scripts/test.sh` | Compiles and runs deterministic core tests without modifying `/etc/hosts`. |
+| `./Scripts/test.sh` | Compiles and runs deterministic core tests. |
 | `./Scripts/build.sh` | Creates and ad-hoc signs `Build/HabitBlocker.app`. |
 | `open Build/HabitBlocker.app` | Opens the locally built menu bar app. |
 
@@ -84,8 +80,9 @@ The core test suite covers the logic that can be safely verified without adminis
 |---|---|
 | Domain normalization | URL host extraction, case normalization, and invalid-input rejection. |
 | Hostname expansion | Standard `www` aliases and YouTube-specific aliases. |
-| Managed-section removal | Preservation of unrelated hosts entries when HabitBlocker rules are removed. |
-| Desired hosts content | Replacement of old rules, creation of IPv4 and IPv6 entries, and clean unblocking. |
+| PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, and case/FQDN handling. |
+| Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output. |
+| Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and same-session rollback. |
 
 ## Project Structure
 
@@ -95,7 +92,8 @@ The core test suite covers the logic that can be safely verified without adminis
 | `Sources/HabitBlocker/MenuContentView.swift` | SwiftUI menu popover and visual components. |
 | `Sources/HabitBlocker/BlockerStore.swift` | Blocking state, focus sessions, summaries, notifications, and local persistence. |
 | `Sources/HabitBlocker/Models.swift` | Domain normalization plus blocking and activity data models. |
-| `Sources/HabitBlocker/HostFileService.swift` | Managed hosts-rule generation, removal, and privileged update handling. |
+| `Sources/HabitBlocker/ProxyBlockService.swift` | PAC generation and serving, local reject listener, system proxy apply and restore. |
+| `Sources/HabitBlocker/AdminShell.swift` | Wrapper for running privileged shell commands. |
 | `Tests/HabitBlockerCoreTests.swift` | Deterministic core-logic tests. |
 | `Scripts/build.sh` | Build and ad-hoc signing script. |
 | `Scripts/test.sh` | Core-test build and execution script. |
@@ -103,14 +101,28 @@ The core test suite covers the logic that can be safely verified without adminis
 
 ## Blocking Method and Limitations
 
-HabitBlocker is a lightweight behavior-change tool, not a security product. It uses a managed local hosts mapping instead of a VPN, proxy, browser extension, or network filter. This is intentionally simple and private, but it has limitations.
+HabitBlocker is a lightweight behavior-change tool, not a security product. Blocking uses the **system proxy auto-configuration (PAC)** mechanism and never reads or writes `/etc/hosts`.
+
+### How it works
+
+| Step | Description |
+|---|---|
+| 1 | The app builds a PAC script from the block list, and a loopback-only (127.0.0.1) listener serves that script. |
+| 2 | Each network service's proxy auto-configuration points at this PAC URL. Previous proxy settings are saved to disk before any change. If the new PAC cannot be verified, the same administrator script restores those settings. Unblock succeeds only after the previous settings are confirmed. |
+| 3 | The PAC routes only blocked domains to the local listener, which answers with a 403 block page. Everything else connects directly (DIRECT). |
+| 4 | DNS and `/etc/hosts` are never used, so name resolution and local services stay intact. The worst case of a PAC misconfiguration is "blocking does not happen". |
+
+Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before any DNS query happens, so it is more robust against secure DNS than a hosts-file approach.
+
+### Limitations
 
 | Limitation | Implication |
 |---|---|
-| Existing browser connections | A tab that was already open may continue temporarily because browsers can retain connections and DNS caches. Fully quit and reopen the browser to force a fresh connection. |
-| VPNs, proxies, or secure DNS | Some configurations or apps can bypass hosts-based resolution. |
-| Browser error page | HabitBlocker blocks the connection; it does not inject a custom in-browser block page. |
-| App not running | A focus timer is checked and reconciled the next time the app launches. Keep the menu bar app running for timely automatic completion. |
+| App not running | The local listener that serves the PAC lives inside the app, so blocking is temporarily lifted while the app is fully quit. The settings remain in place and blocking resumes immediately on relaunch; focus timers are reconciled then too. Keep the menu bar app running for long blocking periods (launch-at-login is supported). |
+| Clients that ignore the system proxy | Most browsers follow the system proxy, but some CLI tools (curl, etc.) and apps that force their own proxy settings can bypass it. |
+| VPNs | VPN clients that ignore the system proxy can bypass it. |
+| Existing browser connections | A tab that was already open may continue temporarily because browsers retain connections. Fully quit and reopen the browser to apply blocking to fresh connections. |
+| Port conflict | If another program occupies port 47471, blocked sites may show the browser's default error page instead. |
 
 Apple documents `MenuBarExtra` as a persistent menu bar control and notes that menu-bar-only utilities can use `LSUIElement` to remain out of the Dock and app switcher.[1] [2]
 

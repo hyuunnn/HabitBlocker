@@ -39,6 +39,9 @@ enum DomainNormalizer {
         let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
         guard var host = URLComponents(string: candidate)?.host?.lowercased() else { return nil }
         host = host.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if host.hasPrefix("www.") {
+            host = String(host.dropFirst(4))
+        }
 
         guard host.contains("."), host != "localhost", host.allSatisfy({ character in
             character.isLetter || character.isNumber || character == "." || character == "-"
