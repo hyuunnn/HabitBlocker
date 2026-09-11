@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import ServiceManagement
@@ -42,12 +43,25 @@ final class BlockerStore: ObservableObject {
         unlockReadyAt != nil && unlockSecondsRemaining == 0
     }
 
+    var isFocusActive: Bool {
+        guard let focusEndDate else { return false }
+        return focusEndDate > Date()
+    }
+
+    var isSessionLocked: Bool {
+        isFocusActive || isUnlockPending
+    }
+
+    var canQuit: Bool {
+        !isBlocked && !isFocusActive
+    }
+
     var statusDescription: String {
         if isApplying { return "시스템 설정을 변경하는 중" }
         if isUnlockPending {
             return isUnlockReady ? "차단 해제를 최종 확인할 수 있습니다" : "차단 해제를 잠시 기다리는 중입니다"
         }
-        if let focusEndDate, focusEndDate > Date() {
+        if isFocusActive {
             return "집중 세션이 진행 중입니다"
         }
         return isBlocked ? "등록한 도메인을 시스템 전체에서 차단합니다" : "현재 등록 사이트에 접근할 수 있습니다"
@@ -57,7 +71,7 @@ final class BlockerStore: ObservableObject {
         if isUnlockPending {
             return isUnlockReady ? "필요한 일인지 한 번만 더 확인해 보세요." : "지금의 짧은 멈춤이 선택의 여유를 만듭니다."
         }
-        if let focusEndDate, focusEndDate > Date() {
+        if isFocusActive {
             return "방해를 줄인 만큼, 지금 하는 일에 더 깊이 머물 수 있습니다."
         }
         return "차단은 포기가 아니라, 지금 할 일에 집중하기 위한 선택입니다."
@@ -100,11 +114,19 @@ final class BlockerStore: ObservableObject {
             ProxyBlockService.startRejectListener()
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        if !isBlocked {
+            clearUnlockWait()
+            focusEndDate = nil
+        }
         scheduleFocusEndIfNeeded()
         scheduleUnlockWaitIfNeeded()
     }
 
     func addSite(_ rawValue: String) {
+        if isBlocked {
+            setStatus("차단이 켜져 있을 때는 목록을 바꿀 수 없습니다.", error: true)
+            return
+        }
         guard let domain = DomainNormalizer.normalize(rawValue) else {
             setStatus("유효한 도메인 또는 URL을 입력하세요.", error: true)
             return
@@ -115,21 +137,27 @@ final class BlockerStore: ObservableObject {
         }
 
         sites.append(BlockedSite(domain: domain))
-        setStatus("\(domain)을(를) 목록에 추가했습니다. 차단 중이라면 ‘목록 변경사항 적용’을 누르세요.", error: false)
+        setStatus("\(domain)을(를) 목록에 추가했습니다.", error: false)
     }
 
     func remove(_ site: BlockedSite) {
-        sites.removeAll { $0.id == site.id }
-        if isBlocked, sites.isEmpty {
-            setStatus("\(site.domain)을(를) 목록에서 제거했습니다. 차단을 끄면 규칙이 해제됩니다.", error: false)
-        } else if isBlocked {
-            setStatus("\(site.domain)을(를) 목록에서 제거했습니다. 차단 중이라면 변경사항을 적용하세요.", error: false)
-        } else {
-            setStatus("\(site.domain)을(를) 목록에서 제거했습니다.", error: false)
+        if isBlocked {
+            setStatus("차단이 켜져 있을 때는 목록을 바꿀 수 없습니다.", error: true)
+            return
         }
+        sites.removeAll { $0.id == site.id }
+        setStatus("\(site.domain)을(를) 목록에서 제거했습니다.", error: false)
     }
 
     func setBlocked(_ shouldBlock: Bool) {
+        if isUnlockPending {
+            setStatus("진행 중인 해제 대기를 마친 뒤 차단을 변경하세요.", error: true)
+            return
+        }
+        if isFocusActive {
+            setStatus("집중 세션 중에는 차단을 직접 끄거나 켤 수 없습니다. 세션을 종료하세요.", error: true)
+            return
+        }
         guard !shouldBlock || !sites.isEmpty else {
             setStatus("먼저 차단할 사이트를 추가하세요.", error: true)
             return
@@ -141,6 +169,10 @@ final class BlockerStore: ObservableObject {
 
     func setUnlockDelay(seconds: Int) {
         guard [30, 60, 300].contains(seconds) else { return }
+        if isBlocked {
+            setStatus("해제 대기 시간은 집중 세션을 시작하기 전에만 바꿀 수 있습니다.", error: true)
+            return
+        }
         unlockDelaySeconds = seconds
         setStatus("차단 해제 대기 시간을 \(unlockDelayLabel)으로 설정했습니다.", error: false)
     }
@@ -174,11 +206,6 @@ final class BlockerStore: ObservableObject {
         }
     }
 
-    func applyCurrentRules() {
-        guard isBlocked, !isUnlockPending else { return }
-        performBlockUpdate(shouldBlock: true)
-    }
-
     func showFocusValidationError() {
         setStatus("집중 시간은 1~1,440분 사이의 정수로 입력하세요.", error: true)
     }
@@ -188,8 +215,8 @@ final class BlockerStore: ObservableObject {
             setStatus("집중 세션 전에 차단할 사이트를 추가하세요.", error: true)
             return
         }
-        guard !isUnlockPending else {
-            setStatus("진행 중인 해제 대기를 취소한 뒤 집중 세션을 시작하세요.", error: true)
+        if isBlocked {
+            setStatus("차단을 끈 뒤에 집중 세션을 시작하세요.", error: true)
             return
         }
 
@@ -214,6 +241,18 @@ final class BlockerStore: ObservableObject {
         beginUnlockWait()
     }
 
+    func quitIfAllowed() {
+        guard canQuit else {
+            notifyQuitBlocked()
+            return
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
+    func notifyQuitBlocked() {
+        setStatus("차단 또는 집중 세션이 켜져 있을 때는 앱을 종료할 수 없습니다.", error: true)
+    }
+
     func refreshSystemState() {
         isBlocked = ProxyBlockService.isBlockActive()
         launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -226,6 +265,7 @@ final class BlockerStore: ObservableObject {
             setStatus("시스템 프록시 규칙으로 등록 사이트가 차단되어 있습니다.", error: false)
         } else {
             clearUnlockWait()
+            focusEndDate = nil
             setStatus("현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
         }
     }
@@ -286,30 +326,29 @@ final class BlockerStore: ObservableObject {
         guard let focusEndDate else { return }
         let remaining = focusEndDate.timeIntervalSinceNow
         if remaining <= 0 {
-            if isBlocked {
-                performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
-                    guard let self, succeeded else { return }
-                    self.recordActivity(.focusCompleted)
-                }
-            } else {
-                self.focusEndDate = nil
-            }
+            finishFocusIfNeeded()
             return
         }
 
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(remaining))
             guard let self, let endDate = self.focusEndDate, endDate <= Date() else { return }
-            if self.isBlocked {
-                self.performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
-                    guard let self, succeeded else { return }
-                    self.recordActivity(.focusCompleted)
-                    self.clearUnlockWait()
-                    self.setStatus("집중 시간이 끝나 차단을 해제했습니다.", error: false)
-                }
-            } else {
-                self.focusEndDate = nil
+            self.finishFocusIfNeeded()
+        }
+    }
+
+    private func finishFocusIfNeeded() {
+        if isUnlockPending {
+            return
+        }
+        if isBlocked {
+            performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
+                guard let self, succeeded else { return }
+                self.recordActivity(.focusCompleted)
+                self.setStatus("집중 시간이 끝나 차단을 해제했습니다.", error: false)
             }
+        } else {
+            focusEndDate = nil
         }
     }
 

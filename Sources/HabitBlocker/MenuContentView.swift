@@ -51,7 +51,7 @@ struct MenuContentView: View {
                 set: { store.setBlocked($0) }
             ))
             .toggleStyle(.switch)
-            .disabled(store.isApplying || store.isUnlockPending || (store.sites.isEmpty && !store.isBlocked))
+            .disabled(store.isApplying || store.isSessionLocked || (store.sites.isEmpty && !store.isBlocked))
 
             if store.isBlocked {
                 HStack(alignment: .top, spacing: 8) {
@@ -65,31 +65,6 @@ struct MenuContentView: View {
                 }
                 .padding(10)
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-            }
-
-            if store.isUnlockPending {
-                unlockWaitPanel
-            } else if store.isBlocked {
-                HStack(spacing: 8) {
-                    Text("해제 대기")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Picker("해제 대기", selection: Binding(
-                        get: { store.unlockDelaySeconds },
-                        set: { store.setUnlockDelay(seconds: $0) }
-                    )) {
-                        Text("30초").tag(30)
-                        Text("1분").tag(60)
-                        Text("5분").tag(300)
-                    }
-                    .labelsHidden()
-                    .frame(width: 78)
-
-                    Text("충동적인 해제를 한 번 멈춥니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
             }
         }
     }
@@ -145,12 +120,13 @@ struct MenuContentView: View {
             HStack(spacing: 8) {
                 TextField("youtube.com 또는 링크 입력", text: $newSite)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(store.isBlocked)
                     .onSubmit(addSite)
 
                 Button(action: addSite) {
                     Image(systemName: "plus")
                 }
-                .disabled(newSite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(store.isBlocked || newSite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("사이트 추가")
             }
 
@@ -174,6 +150,7 @@ struct MenuContentView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
+                            .disabled(store.isBlocked)
                             .help("목록에서 제거")
                         }
                         .padding(.vertical, 6)
@@ -184,13 +161,6 @@ struct MenuContentView: View {
                     }
                 }
                 .frame(maxHeight: 120)
-
-                if store.isBlocked && !store.isUnlockPending {
-                    Button("목록 변경사항 적용") {
-                        store.applyCurrentRules()
-                    }
-                    .disabled(store.isApplying)
-                }
             }
         }
     }
@@ -202,7 +172,7 @@ struct MenuContentView: View {
             Text("집중 세션")
                 .font(.headline)
 
-            if let focusEnd = store.focusEndDate, focusEnd > Date() {
+            if store.isFocusActive, let focusEnd = store.focusEndDate {
                 HStack {
                     Image(systemName: "timer")
                         .foregroundStyle(.orange)
@@ -223,6 +193,7 @@ struct MenuContentView: View {
                     }
                     .labelsHidden()
                     .frame(width: 78)
+                    .disabled(store.isBlocked || store.isApplying)
 
                     Text("또는")
                         .font(.caption)
@@ -231,17 +202,46 @@ struct MenuContentView: View {
                     TextField("직접 입력", text: $customFocusMinutes)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 78)
+                        .disabled(store.isBlocked || store.isApplying)
                         .onSubmit(startFocus)
 
                     Text("분")
                         .foregroundStyle(.secondary)
 
                     Button("집중 시작", action: startFocus)
-                        .disabled(store.sites.isEmpty || store.isApplying || store.isUnlockPending)
+                        .disabled(store.sites.isEmpty || store.isApplying || store.isBlocked)
                 }
 
-                Text("빠른 시간을 고르거나 1~1,440분을 직접 입력하세요.")
+                Text(store.isBlocked
+                     ? "집중 세션은 차단을 끈 뒤에 시작할 수 있습니다."
+                     : "빠른 시간을 고르거나 1~1,440분을 직접 입력하세요.")
                     .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if store.isUnlockPending {
+                unlockWaitPanel
+            }
+
+            HStack(spacing: 8) {
+                Text("해제 대기")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("해제 대기", selection: Binding(
+                    get: { store.unlockDelaySeconds },
+                    set: { store.setUnlockDelay(seconds: $0) }
+                )) {
+                    Text("30초").tag(30)
+                    Text("1분").tag(60)
+                    Text("5분").tag(300)
+                }
+                .labelsHidden()
+                .frame(width: 78)
+                .disabled(store.isApplying || store.isBlocked)
+
+                Text("집중을 끝낼 때 충동적인 해제를 한 번 멈춥니다.")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
@@ -295,19 +295,12 @@ struct MenuContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack {
-                Button("상태 새로고침") {
-                    store.refreshSystemState()
-                }
-                .disabled(store.isApplying)
-
-                Spacer()
-
-                Button("종료") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .keyboardShortcut("q")
+            Button("종료") {
+                store.quitIfAllowed()
             }
+            .disabled(!store.canQuit)
+            .keyboardShortcut("q")
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 

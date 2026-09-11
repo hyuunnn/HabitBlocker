@@ -38,17 +38,17 @@ The app appears as a shield icon in the macOS menu bar. Click the icon to open t
 |---|---|
 | 1 | Open the shield icon in the menu bar. |
 | 2 | Add a domain like `youtube.com` or paste a full URL in **Blocked Sites**. |
-| 3 | Turn **Block Registered Sites** on to apply the rule immediately. Turn it off to remove the rule immediately. |
-| 4 | Start a focus session with a quick preset or a custom duration from 1 to 1,440 minutes. |
-| 5 | When ending a focus session, complete the configured unlock wait before confirming the final unblock. |
+| 3 | Edit the list only while blocking is off. The list locks once blocking is on. |
+| 4 | Turn **Block Registered Sites** on to apply the rule immediately. Turn it off to remove the rule immediately. |
+| 5 | Start a focus session only after blocking is off. When ending a session, finish the unlock wait before confirming. |
 
-The standard block toggle is intentionally immediate. The unlock wait applies only when ending a focus session.
+The standard block toggle is immediate. The unlock wait applies only when ending a focus session. The app cannot quit while blocking or a focus session is on.
 
 ## Usage Flow
 
 ![HabitBlocker usage flow](Assets/habitblocker-usage-flow.png)
 
-*Illustrative usage-flow mockup: add a domain, enable blocking or begin a focus session, then complete the deliberate unlock step when ending that session.*
+*Usage flow based on the current menu: set the list, start a focus session, then complete the unlock wait when ending it.*
 
 ## Features
 
@@ -58,8 +58,8 @@ The standard block toggle is intentionally immediate. The unlock wait applies on
 | Domain and URL input | Accepts domain names and full URLs, extracting the host safely. |
 | System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never reads or writes `/etc/hosts`. |
 | YouTube expansion | Adding `youtube.com` also blocks `www`, `m`, `music`, `studio`, and `youtu.be`. |
-| Focus sessions | Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
-| Unlock wait | A 30-second, 1-minute, or 5-minute wait applies only to focus-session exits. |
+| Focus sessions | Can start only while blocking is off. Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
+| Unlock wait | Always shown under Focus. The 30-second, 1-minute, or 5-minute delay can be changed only before a session starts, and applies only when ending that session. |
 | Local summary | Shows today’s focus starts, planned focus minutes, and unlock attempts. Activity data stays on this Mac and is pruned after 90 days. |
 | Focus messages | Displays encouragement inside the app and can send a macOS notification when permission is granted. |
 | Launch at login | Uses the macOS login-item service to launch from the menu bar after sign-in. |
