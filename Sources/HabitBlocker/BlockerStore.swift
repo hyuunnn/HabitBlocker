@@ -256,6 +256,7 @@ final class BlockerStore: ObservableObject {
     }
 
     func refreshSystemState() {
+        if isApplying { return }
         isBlocked = ProxyBlockService.isBlockActive()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if isBlocked {
