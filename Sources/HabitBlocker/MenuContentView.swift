@@ -120,13 +120,13 @@ struct MenuContentView: View {
             HStack(spacing: 8) {
                 TextField("youtube.com 또는 링크 입력", text: $newSite)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(store.isBlocked)
+                    .disabled(store.isBlocked || store.isApplying)
                     .onSubmit(addSite)
 
                 Button(action: addSite) {
                     Image(systemName: "plus")
                 }
-                .disabled(store.isBlocked || newSite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(store.isBlocked || store.isApplying || newSite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("사이트 추가")
             }
 
@@ -150,7 +150,7 @@ struct MenuContentView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
-                            .disabled(store.isBlocked)
+                            .disabled(store.isBlocked || store.isApplying)
                             .help("목록에서 제거")
                         }
                         .padding(.vertical, 6)
@@ -184,7 +184,7 @@ struct MenuContentView: View {
                     }
                     .disabled(store.isApplying || store.isUnlockPending)
                 }
-            } else {
+            } else if !store.isUnlockPending {
                 HStack(spacing: 8) {
                     Picker("빠른 시간", selection: $selectedFocusMinutes) {
                         Text("25분").tag(25)

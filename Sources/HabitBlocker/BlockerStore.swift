@@ -53,7 +53,7 @@ final class BlockerStore: ObservableObject {
     }
 
     var canQuit: Bool {
-        !isBlocked && !isFocusActive
+        !isBlocked && !isFocusActive && !isApplying
     }
 
     var statusDescription: String {
@@ -123,7 +123,7 @@ final class BlockerStore: ObservableObject {
     }
 
     func addSite(_ rawValue: String) {
-        if isBlocked {
+        if isBlocked || isApplying {
             setStatus("차단이 켜져 있을 때는 목록을 바꿀 수 없습니다.", error: true)
             return
         }
@@ -141,7 +141,7 @@ final class BlockerStore: ObservableObject {
     }
 
     func remove(_ site: BlockedSite) {
-        if isBlocked {
+        if isBlocked || isApplying {
             setStatus("차단이 켜져 있을 때는 목록을 바꿀 수 없습니다.", error: true)
             return
         }
@@ -163,14 +163,13 @@ final class BlockerStore: ObservableObject {
             return
         }
 
-        clearUnlockWait()
         performBlockUpdate(shouldBlock: shouldBlock)
     }
 
     func setUnlockDelay(seconds: Int) {
         guard [30, 60, 300].contains(seconds) else { return }
         if isBlocked {
-            setStatus("해제 대기 시간은 집중 세션을 시작하기 전에만 바꿀 수 있습니다.", error: true)
+            setStatus("해제 대기 시간은 차단이 꺼져 있을 때만 바꿀 수 있습니다.", error: true)
             return
         }
         unlockDelaySeconds = seconds
@@ -189,6 +188,9 @@ final class BlockerStore: ObservableObject {
 
     func cancelUnlockWait() {
         clearUnlockWait()
+        if let focusEndDate, focusEndDate <= Date() {
+            self.focusEndDate = nil
+        }
         setStatus("차단 해제를 취소하고 집중을 이어갑니다.", error: false)
     }
 
