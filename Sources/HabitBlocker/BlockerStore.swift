@@ -91,12 +91,10 @@ final class BlockerStore: ObservableObject {
         activityEvents.filter { $0.kind == .unlockRequested && Calendar.current.isDateInToday($0.timestamp) }.count
     }
 
-    var recentUnlockAttempts: [HabitActivity] {
+    var latestUnlockAttempt: HabitActivity? {
         activityEvents
             .filter { $0.kind == .unlockRequested }
-            .sorted { $0.timestamp > $1.timestamp }
-            .prefix(3)
-            .map { $0 }
+            .max(by: { $0.timestamp < $1.timestamp })
     }
 
     init() {
@@ -187,11 +185,14 @@ final class BlockerStore: ObservableObject {
     }
 
     func cancelUnlockWait() {
+        let focusAlreadyEnded = focusEndDate.map { $0 <= Date() } ?? false
         clearUnlockWait()
-        if let focusEndDate, focusEndDate <= Date() {
-            self.focusEndDate = nil
+        if focusAlreadyEnded {
+            focusEndDate = nil
+            setStatus("차단 해제를 취소하고 차단을 유지합니다.", error: false)
+        } else {
+            setStatus("차단 해제를 취소하고 집중을 이어갑니다.", error: false)
         }
-        setStatus("차단 해제를 취소하고 집중을 이어갑니다.", error: false)
     }
 
     func confirmUnblock() {
@@ -215,6 +216,9 @@ final class BlockerStore: ObservableObject {
     func startFocus(minutes: Int) {
         guard !sites.isEmpty else {
             setStatus("집중 세션 전에 차단할 사이트를 추가하세요.", error: true)
+            return
+        }
+        if isApplying {
             return
         }
         if isBlocked {
@@ -312,7 +316,7 @@ final class BlockerStore: ObservableObject {
                 }
                 if shouldBlock, !ProxyBlockService.isListenerRunning {
                     setStatus("차단 규칙은 적용됐지만 로컬 응답 서버를 시작하지 못했습니다. 차단 사이트는 브라우저 기본 오류 화면으로 표시됩니다.", error: true)
-                } else if statusMessage.contains("관리자 권한") {
+                } else {
                     setStatus(shouldBlock ? "차단 규칙을 적용했습니다." : "차단을 해제했습니다.", error: false)
                 }
                 completion(true)

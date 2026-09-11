@@ -266,7 +266,7 @@ struct MenuContentView: View {
                 MetricView(value: "\(store.todayUnlockAttemptCount)회", label: "해제 시도")
             }
 
-            if let latestAttempt = store.recentUnlockAttempts.first {
+            if let latestAttempt = store.latestUnlockAttempt {
                 Text("최근 해제 시도: \(latestAttempt.timestamp.formatted(date: .omitted, time: .shortened))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
