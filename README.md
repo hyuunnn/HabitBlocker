@@ -6,10 +6,6 @@
 
 [한국어 안내 보기](README_ko.md)
 
-## Built with Manus 1.6
-
-This project was built with **Manus 1.6** through a vibe-coding workflow: the product flow, SwiftUI menu bar interface, domain-blocking logic, refactoring, automated tests, and documentation were iteratively created and validated from a natural-language product brief.
-
 ## Requirements
 
 | Requirement | Details |
@@ -34,7 +30,7 @@ open Build/HabitBlocker.app
 
 The app appears as a shield icon in the macOS menu bar. Click the icon to open the popover.
 
-> On the first blocking change, macOS asks for an administrator password. HabitBlocker only changes the network proxy auto-configuration and never modifies system files such as `/etc/hosts`.
+> On the first blocking change, macOS asks for an administrator password. HabitBlocker changes the network proxy auto-configuration and does not modify `/etc/hosts`.
 
 ## How to Use
 
@@ -60,7 +56,7 @@ The standard block toggle is intentionally immediate. The unlock wait applies on
 |---|---|
 | Menu bar control | Manage status, block lists, focus sessions, unlock waits, and summaries from a single SwiftUI popover. |
 | Domain and URL input | Accepts domain names and full URLs, extracting the host safely. |
-| System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never modifies system files such as `/etc/hosts`. |
+| System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never reads or writes `/etc/hosts`. |
 | YouTube expansion | Adding `youtube.com` also blocks `www`, `m`, `music`, `studio`, and `youtu.be`. |
 | Focus sessions | Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
 | Unlock wait | A 30-second, 1-minute, or 5-minute wait applies only to focus-session exits. |
@@ -86,8 +82,7 @@ The core test suite covers the logic that can be safely verified without adminis
 | Hostname expansion | Standard `www` aliases and YouTube-specific aliases. |
 | PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, and case/FQDN handling. |
 | Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output. |
-| Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and hosts-cleanup inclusion. |
-| Hosts cleanup (migration) | Removes the legacy managed section while preserving unrelated hosts entries. |
+| Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and same-session rollback. |
 
 ## Project Structure
 
@@ -99,7 +94,6 @@ The core test suite covers the logic that can be safely verified without adminis
 | `Sources/HabitBlocker/Models.swift` | Domain normalization plus blocking and activity data models. |
 | `Sources/HabitBlocker/ProxyBlockService.swift` | PAC generation and serving, local reject listener, system proxy apply and restore. |
 | `Sources/HabitBlocker/AdminShell.swift` | Wrapper for running privileged shell commands. |
-| `Sources/HabitBlocker/HostFileService.swift` | Legacy hosts-rule cleanup (migration only). |
 | `Tests/HabitBlockerCoreTests.swift` | Deterministic core-logic tests. |
 | `Scripts/build.sh` | Build and ad-hoc signing script. |
 | `Scripts/test.sh` | Core-test build and execution script. |
@@ -107,16 +101,16 @@ The core test suite covers the logic that can be safely verified without adminis
 
 ## Blocking Method and Limitations
 
-HabitBlocker is a lightweight behavior-change tool, not a security product. Blocking uses the **system proxy auto-configuration (PAC)** mechanism and never modifies a single system file.
+HabitBlocker is a lightweight behavior-change tool, not a security product. Blocking uses the **system proxy auto-configuration (PAC)** mechanism and never reads or writes `/etc/hosts`.
 
 ### How it works
 
 | Step | Description |
 |---|---|
 | 1 | The app builds a PAC script from the block list, and a loopback-only (127.0.0.1) listener serves that script. |
-| 2 | Each network service's proxy auto-configuration points at this PAC URL. Applying or removing a rule asks for the administrator password once; the previous proxy settings are backed up and restored on unblock. |
+| 2 | Each network service's proxy auto-configuration points at this PAC URL. Previous proxy settings are saved to disk before any change. If the new PAC cannot be verified, the same administrator script restores those settings. Unblock succeeds only after the previous settings are confirmed. |
 | 3 | The PAC routes only blocked domains to the local listener, which answers with a 403 block page. Everything else connects directly (DIRECT). |
-| 4 | DNS and `/etc/hosts` are never touched, so name resolution and local services stay intact. The worst case of a misconfiguration is "blocking does not happen". |
+| 4 | DNS and `/etc/hosts` are never used, so name resolution and local services stay intact. The worst case of a PAC misconfiguration is "blocking does not happen". |
 
 Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before any DNS query happens, so it is more robust against secure DNS than a hosts-file approach.
 
@@ -129,10 +123,6 @@ Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before a
 | VPNs | VPN clients that ignore the system proxy can bypass it. |
 | Existing browser connections | A tab that was already open may continue temporarily because browsers retain connections. Fully quit and reopen the browser to apply blocking to fresh connections. |
 | Port conflict | If another program occupies port 47471, blocked sites may show the browser's default error page instead. |
-
-### Upgrading from an older version
-
-Version 1.0 wrote blocking rules into `/etc/hosts`. The current version never modifies the hosts file; it detects leftover rules automatically and, on the next apply or unblock, removes them and restores the original hosts content within the same administrator approval.
 
 Apple documents `MenuBarExtra` as a persistent menu bar control and notes that menu-bar-only utilities can use `LSUIElement` to remain out of the Dock and app switcher.[1] [2]
 

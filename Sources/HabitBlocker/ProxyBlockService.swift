@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Network
 
-/// /etc/hosts 대신 시스템 프록시 자동 설정(PAC)으로 도메인을 차단하는 엔진.
+/// 시스템 프록시 자동 설정(PAC)으로 도메인을 차단하는 엔진. /etc/hosts는 읽거나 쓰지 않는다.
 ///
 /// 동작 방식:
 /// 1. 앱이 차단 도메인 목록으로 PAC 스크립트를 만들어 메모리에 보관하고,
@@ -11,7 +11,7 @@ import Network
 /// 3. 리스너는 차단 대상으로 온 요청(CONNECT/HTTP)에 403 차단 화면을 응답한다.
 /// 4. 네트워크 서비스의 프록시 자동 설정 URL은 networksetup으로 켜고 끈다(관리자 권한).
 ///
-/// 시스템 파일은 일절 수정하지 않고, 설정이 잘못되어도 최악은 "차단 안 됨"이다.
+/// /etc/hosts를 포함한 시스템 파일은 수정하지 않는다. PAC이 잘못되어도 최악은 "차단 안 됨"이다.
 enum ProxyBlockService {
     static let listenPort: UInt16 = 47471
 
@@ -36,6 +36,7 @@ enum ProxyBlockService {
         case networkServicesUnavailable
         case applyNotVerified
         case clearNotVerified
+        case restoreNotVerified
 
         var errorDescription: String? {
             switch self {
@@ -46,7 +47,9 @@ enum ProxyBlockService {
             case .applyNotVerified:
                 return "프록시 규칙 적용을 확인하지 못했습니다. 네트워크 서비스 구성이 바뀌지 않았는지 확인하고 다시 시도하세요."
             case .clearNotVerified:
-                return "차단 해제를 확인하지 못했습니다. 시스템 설정 > 네트워크 > 프록시에서 자동 프록시 구성 상태를 확인하세요."
+                return "차단 해제를 확인하지 못했습니다. 시스템 설정 > 네트워크 > 프록시에서 자동 프록시 구성 상태를 확인하세요. 이전 설정 백업은 유지되어 있습니다."
+            case .restoreNotVerified:
+                return "이전 프록시 설정을 확인하지 못했습니다. 시스템 설정 > 네트워크 > 프록시에서 자동 프록시 구성을 확인한 뒤 다시 시도하세요. 백업은 유지되어 있습니다."
             }
         }
     }
@@ -112,6 +115,12 @@ enum ProxyBlockService {
         if let schemeRange = target.range(of: "://") {
             guard let pathIndex = target[schemeRange.upperBound...].firstIndex(of: "/") else { return false }
             target = String(target[pathIndex...])
+        }
+        if let query = target.firstIndex(of: "?") {
+            target = String(target[..<query])
+        }
+        if let fragment = target.firstIndex(of: "#") {
+            target = String(target[..<fragment])
         }
         return target.hasPrefix(pacPathPrefix) && target.hasSuffix(pacPathSuffix)
     }
@@ -250,7 +259,6 @@ enum ProxyBlockService {
     // MARK: - 시스템 프록시 상태 (읽기는 관리자 권한 불필요)
 
     static func isBlockActive() -> Bool {
-        if HostFileService.isLegacySectionPresent() { return true }
         for service in listNetworkServices() {
             if let entry = currentAutoProxyEntry(for: service),
                entry.enabled, let url = entry.url, isHabitBlockerPacURL(url) {
@@ -263,13 +271,12 @@ enum ProxyBlockService {
     static func networkServiceNames(fromListOutput output: String) -> [String] {
         var names: [String] = []
         for rawLine in output.components(separatedBy: .newlines) {
-            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty else { continue }
             let lowered = line.lowercased()
             if lowered.contains("denotes that a network service is disabled") { continue }
             if lowered.hasPrefix("** error") { continue }
-            if line.hasPrefix("*") { line.removeFirst() }
-            if line.isEmpty { continue }
+            if line.hasPrefix("*") { continue }
             names.append(line)
         }
         return names
@@ -331,6 +338,7 @@ enum ProxyBlockService {
             return nil
         }
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        _ = errorPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return String(data: outputData, encoding: .utf8)
@@ -347,107 +355,197 @@ enum ProxyBlockService {
 
         if shouldBlock {
             let pacURLString = preparePacScript(domains: domains)
-
-            var backup = readProxyBackup()
-            for service in services {
-                guard let current = currentAutoProxyEntry(for: service) else { continue }
-                if let url = current.url, isHabitBlockerPacURL(url) { continue }
-                backup[service] = current
-            }
+            let backup = mergingProxyBackup(existing: readProxyBackup(), current: currentAutoProxyEntries(for: services))
+            // 시스템 설정을 바꾸기 전에 먼저 남긴다. 적용이 중간에 실패해도 이전 PAC을 되돌릴 수 있다.
+            saveProxyBackup(backup)
 
             let script = buildAdminScript(
                 services: services,
                 pacURLString: pacURLString,
-                restore: [:],
-                hostsCleanupContent: HostFileService.cleanedHostsContent()
+                restore: backup
             )
-            try await AdminShell.run("do shell script \(AdminShell.appleScriptString(script)) with administrator privileges")
-            // 암호 취소 등으로 스크립트가 실행되지 않았으면 백업도 남기지 않는다.
-            saveProxyBackup(backup)
             startRejectListener()
+            try await AdminShell.runPrivileged(script)
 
-            guard hasOurPacEnabled() else { throw BlockServiceError.applyNotVerified }
+            guard isBlockActive() else { throw BlockServiceError.applyNotVerified }
             saveLastAppliedDomains(domains)
         } else {
+            let backup = readProxyBackup()
             let script = buildAdminScript(
                 services: services,
                 pacURLString: nil,
-                restore: readProxyBackup(),
-                hostsCleanupContent: HostFileService.cleanedHostsContent()
+                restore: backup
             )
-            try await AdminShell.run("do shell script \(AdminShell.appleScriptString(script)) with administrator privileges")
+            try await AdminShell.runPrivileged(script)
 
             guard !isBlockActive() else { throw BlockServiceError.clearNotVerified }
+            guard settingsMatchBackup(current: currentAutoProxyEntries(for: services), backup: backup, services: services) else {
+                throw BlockServiceError.restoreNotVerified
+            }
             clearProxyBackup()
             clearLastAppliedDomains()
             stopRejectListener()
         }
     }
 
-    /// 실제로 어딘가에 우리 PAC이 켜져 있는지. 레거시 hosts와 무관하게 프록시 상태만 본다.
-    private static func hasOurPacEnabled() -> Bool {
-        for service in listNetworkServices() {
-            guard let entry = currentAutoProxyEntry(for: service),
-                  entry.enabled, let url = entry.url else { continue }
-            if isHabitBlockerPacURL(url) { return true }
-        }
-        return false
-    }
-
     /// networksetup 명령 스크립트 생성. pacURLString이 nil이면 해제(또는 백업 복원)한다.
+    /// 적용 스크립트는 같은 권한 세션 안에서 PAC 확인에 실패하면 백업된 이전 설정을 되돌린다.
     static func buildAdminScript(services: [String],
                                  pacURLString: String?,
-                                 restore: [String: ProxyBackupEntry],
-                                 hostsCleanupContent: String?) -> String {
+                                 restore: [String: ProxyBackupEntry]) -> String {
         var lines = ["set -e"]
 
-        if let hostsCleanupContent {
-            let encoded = Data(hostsCleanupContent.utf8).base64EncodedString()
-            lines.append("printf %s \(encoded) | /usr/bin/base64 -D > /etc/hosts")
-            lines.append("/usr/bin/dscacheutil -flushcache")
-            lines.append("/usr/bin/killall -HUP mDNSResponder || true")
-        }
-
-        // 서비스 하나가 실패해도 나머지를 계속 적용한다. 성공 여부는 apply()가 실제 시스템 상태로 판정한다.
-        let tolerate = " 2>/dev/null || true"
-        let networksetup = shellQuoted(networkSetupPath)
-        for service in services {
-            let serviceArgument = shellQuoted(service)
-            if let pacURLString {
-                lines.append("\(networksetup) -setautoproxyurl \(serviceArgument) \(shellQuoted(pacURLString))\(tolerate)")
-                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) on\(tolerate)")
-            } else if let entry = restore[service], let url = entry.url, !url.isEmpty {
-                lines.append("\(networksetup) -setautoproxyurl \(serviceArgument) \(shellQuoted(url))\(tolerate)")
-                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) \(entry.enabled ? "on" : "off")\(tolerate)")
-            } else if restore[service] != nil {
-                // URL 없이 '켜짐'이던 비정상 설정은 꺼진 상태로 복원한다.
-                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
-            } else {
-                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
-                lines.append("\(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)")
-            }
+        if let pacURLString {
+            lines.append(contentsOf: proxyMutationLines(services: services, pacURLString: pacURLString, restore: [:]))
+            lines.append(contentsOf: pacApplyVerificationLines(services: services))
+            lines.append("if [ \"$_hb_pac_ok\" -ne 1 ]; then")
+            lines.append(contentsOf: proxyMutationLines(services: services, pacURLString: nil, restore: restore))
+            lines.append("echo 'PAC apply was not verified; previous proxy settings were restored' >&2")
+            lines.append("exit 1")
+            lines.append("fi")
+        } else {
+            lines.append(contentsOf: proxyMutationLines(services: services, pacURLString: nil, restore: restore))
         }
         return lines.joined(separator: "\n")
     }
 
-    static func shellQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    /// 우리 PAC이 아닌 현재 값만 백업에 합친다. 이미 우리 PAC이 켜진 서비스는 이전 사용자 설정을 덮지 않는다.
+    static func mergingProxyBackup(existing: [String: ProxyBackupEntry],
+                                   current: [String: ProxyBackupEntry]) -> [String: ProxyBackupEntry] {
+        var backup = existing
+        for (service, entry) in current {
+            if let url = entry.url, isHabitBlockerPacURL(url) { continue }
+            backup[service] = entry
+        }
+        return backup
+    }
+
+    /// 해제 후 각 서비스가 백업과 맞는지 확인한다. 목록에 없는 서비스는 건너뛰고, 목록에 있는데 상태를 못 읽으면 실패다.
+    static func settingsMatchBackup(current: [String: ProxyBackupEntry],
+                                    backup: [String: ProxyBackupEntry],
+                                    services: [String]) -> Bool {
+        for service in services {
+            guard let expected = backup[service] else {
+                if let actual = current[service],
+                   actual.enabled,
+                   let url = actual.url,
+                   isHabitBlockerPacURL(url) {
+                    return false
+                }
+                continue
+            }
+            guard let actual = current[service] else { return false }
+            if let expectedURL = expected.url, !expectedURL.isEmpty {
+                if normalizeProxyURL(actual.url) != normalizeProxyURL(expectedURL) {
+                    return false
+                }
+                if actual.enabled != expected.enabled {
+                    return false
+                }
+            } else if actual.enabled {
+                return false
+            }
+        }
+        return true
+    }
+
+    static func normalizeProxyURL(_ url: String?) -> String? {
+        guard var value = url?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        if value.hasPrefix("<"), value.hasSuffix(">") {
+            value = String(value.dropFirst().dropLast())
+        }
+        return value
+    }
+
+    static func currentAutoProxyEntries(for services: [String]) -> [String: ProxyBackupEntry] {
+        var result: [String: ProxyBackupEntry] = [:]
+        for service in services {
+            if let entry = currentAutoProxyEntry(for: service) {
+                result[service] = entry
+            }
+        }
+        return result
+    }
+
+    private static func proxyMutationLines(services: [String],
+                                           pacURLString: String?,
+                                           restore: [String: ProxyBackupEntry]) -> [String] {
+        // 서비스 하나가 실패해도 나머지를 계속 적용한다. 성공 여부는 스크립트 검증과 apply()가 판정한다.
+        let tolerate = " 2>/dev/null || true"
+        let networksetup = AdminShell.shellQuoted(networkSetupPath)
+        var lines: [String] = []
+        for service in services {
+            let serviceArgument = AdminShell.shellQuoted(service)
+            if let pacURLString {
+                lines.append("\(networksetup) -setautoproxyurl \(serviceArgument) \(AdminShell.shellQuoted(pacURLString))\(tolerate)")
+                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) on\(tolerate)")
+            } else if let entry = restore[service], let url = entry.url, !url.isEmpty {
+                lines.append("\(networksetup) -setautoproxyurl \(serviceArgument) \(AdminShell.shellQuoted(url))\(tolerate)")
+                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) \(entry.enabled ? "on" : "off")\(tolerate)")
+            } else if restore[service] != nil {
+                lines.append("\(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
+            } else {
+                // 백업이 없으면 우리 PAC만 지운다. 다른 도구의 자동 프록시는 그대로 둔다.
+                lines.append("_hb_cur=$(\(networksetup) -getautoproxyurl \(serviceArgument) 2>/dev/null || true)")
+                lines.append("if echo \"$_hb_cur\" | /usr/bin/grep -qi \(AdminShell.shellQuoted("127.0.0.1:\(listenPort)")) && echo \"$_hb_cur\" | /usr/bin/grep -qi \(AdminShell.shellQuoted(pacPathPrefix)); then")
+                lines.append("  \(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
+                lines.append("  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)")
+                lines.append("fi")
+            }
+        }
+        return lines
+    }
+
+    private static func pacApplyVerificationLines(services: [String]) -> [String] {
+        var lines = ["_hb_pac_ok=0"]
+        let needle = "127.0.0.1:\(listenPort)"
+        for service in services {
+            lines.append("_hb_out=$(\(AdminShell.shellQuoted(networkSetupPath)) -getautoproxyurl \(AdminShell.shellQuoted(service)) 2>/dev/null || true)")
+            lines.append("if echo \"$_hb_out\" | /usr/bin/grep -qi \(AdminShell.shellQuoted(needle)) && echo \"$_hb_out\" | /usr/bin/grep -qi \(AdminShell.shellQuoted(pacPathPrefix)) && echo \"$_hb_out\" | /usr/bin/grep -qi 'enabled: yes'; then")
+            lines.append("  _hb_pac_ok=1")
+            lines.append("fi")
+        }
+        return lines
     }
 
     // MARK: - 로컬 저장
 
-    static func readProxyBackup(defaults: UserDefaults = .standard) -> [String: ProxyBackupEntry] {
+    static func proxyBackupFileURL() -> URL {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return root
+            .appendingPathComponent("HabitBlocker", isDirectory: true)
+            .appendingPathComponent("proxy-backup.json")
+    }
+
+    static func readProxyBackup(defaults: UserDefaults = .standard, fileURL: URL? = nil) -> [String: ProxyBackupEntry] {
+        let url = fileURL ?? proxyBackupFileURL()
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([String: ProxyBackupEntry].self, from: data) {
+            return decoded
+        }
         guard let data = defaults.data(forKey: proxyBackupKey) else { return [:] }
         return (try? JSONDecoder().decode([String: ProxyBackupEntry].self, from: data)) ?? [:]
     }
 
-    static func saveProxyBackup(_ backup: [String: ProxyBackupEntry], defaults: UserDefaults = .standard) {
+    static func saveProxyBackup(_ backup: [String: ProxyBackupEntry],
+                                defaults: UserDefaults = .standard,
+                                fileURL: URL? = nil) {
         guard let data = try? JSONEncoder().encode(backup) else { return }
         defaults.set(data, forKey: proxyBackupKey)
+        let url = fileURL ?? proxyBackupFileURL()
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            // 오래된 파일이 UserDefaults의 새 백업을 가리면 해제 때 이전 PAC을 잃는다.
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
-    static func clearProxyBackup(defaults: UserDefaults = .standard) {
+    static func clearProxyBackup(defaults: UserDefaults = .standard, fileURL: URL? = nil) {
         defaults.removeObject(forKey: proxyBackupKey)
+        try? FileManager.default.removeItem(at: fileURL ?? proxyBackupFileURL())
     }
 
     /// 마지막으로 차단에 성공한 도메인 목록. 앱 재실행 시 PAC을 즉시 재구성하기 위해 사용한다.

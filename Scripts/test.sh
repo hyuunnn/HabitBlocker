@@ -15,7 +15,6 @@ swiftc \
   "$ROOT_DIR/Sources/HabitBlocker/Models.swift" \
   "$ROOT_DIR/Sources/HabitBlocker/AdminShell.swift" \
   "$ROOT_DIR/Sources/HabitBlocker/ProxyBlockService.swift" \
-  "$ROOT_DIR/Sources/HabitBlocker/HostFileService.swift" \
   "$ROOT_DIR/Tests/HabitBlockerCoreTests.swift"
 
 "$TEST_BINARY"

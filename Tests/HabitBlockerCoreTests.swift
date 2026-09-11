@@ -9,13 +9,14 @@ enum HabitBlockerCoreTests {
     static func main() {
         testDomainNormalization()
         testHostnameExpansion()
-        testManagedSectionRemoval()
-        testCleanedHostsContent()
         testPacScriptGeneration()
         testPacScriptMatching()
         testNetworkServiceNameParsing()
         testAutoProxyEntryParsing()
         testAdminScriptGeneration()
+        testProxyBackupMerge()
+        testRestoreSettingsMatch()
+        testProxyBackupPersistence()
         testPacRequestDetection()
 
         if failures == 0 {
@@ -28,12 +29,16 @@ enum HabitBlockerCoreTests {
 
     private static func testDomainNormalization() {
         expect(
-            DomainNormalizer.normalize(" https://WWW.YouTube.com/watch?v=abc ") == "www.youtube.com",
-            "URL에서 소문자 도메인을 추출해야 합니다."
+            DomainNormalizer.normalize(" https://WWW.YouTube.com/watch?v=abc ") == "youtube.com",
+            "URL에서 소문자 도메인을 추출하고 선행 www를 제거해야 합니다."
         )
         expect(
             DomainNormalizer.normalize("youtube.com") == "youtube.com",
             "스킴 없는 도메인을 처리해야 합니다."
+        )
+        expect(
+            DomainNormalizer.normalize("www.reddit.com") == "reddit.com",
+            "선행 www는 루트 도메인으로 정규화해야 합니다."
         )
         expect(
             DomainNormalizer.normalize("localhost") == nil,
@@ -62,42 +67,6 @@ enum HabitBlockerCoreTests {
             DomainNormalizer.hostnames(for: ["example.com"]) == ["example.com", "www.example.com"],
             "일반 도메인은 루트와 www 호스트를 생성해야 합니다."
         )
-    }
-
-    private static func testManagedSectionRemoval() {
-        let hosts = """
-        127.0.0.1 localhost
-        # HabitBlocker BEGIN
-        127.0.0.1 youtube.com
-        ::1 youtube.com
-        # HabitBlocker END
-        ::1 localhost
-        """
-        let cleaned = HostFileService.removingManagedSection(from: hosts)
-
-        expect(!cleaned.contains("HabitBlocker"), "관리 섹션 표식을 제거해야 합니다.")
-        expect(!cleaned.contains("youtube.com"), "관리 섹션의 도메인 규칙을 제거해야 합니다.")
-        expect(cleaned.contains("127.0.0.1 localhost"), "기존 IPv4 hosts 항목을 보존해야 합니다.")
-        expect(cleaned.contains("::1 localhost"), "기존 IPv6 hosts 항목을 보존해야 합니다.")
-    }
-
-    private static func testCleanedHostsContent() {
-        let hosts = """
-        127.0.0.1 localhost
-        # HabitBlocker BEGIN
-        127.0.0.1 youtube.com
-        ::1 www.youtube.com
-        # HabitBlocker END
-        ::1 broadcasthost
-        """
-        let cleaned = HostFileService.cleanedHostsContent(from: hosts)
-
-        expect(HostFileService.containsManagedSection(hosts), "관리 섹션이 있으면 감지해야 합니다.")
-        expect(!HostFileService.containsManagedSection(cleaned), "정리된 내용에는 관리 섹션이 없어야 합니다.")
-        expect(!cleaned.contains("youtube.com"), "이전 차단 규칙을 제거해야 합니다.")
-        expect(cleaned.contains("127.0.0.1 localhost") && cleaned.contains("::1 broadcasthost"), "기존 항목을 유지해야 합니다.")
-        expect(cleaned.hasSuffix("\n"), "정리된 내용은 개행으로 끝나야 합니다.")
-        expect(HostFileService.cleanedHostsContent(from: cleaned) == cleaned, "정리 작업은 멱등해야 합니다.")
     }
 
     private static func testPacScriptGeneration() {
@@ -155,8 +124,8 @@ enum HabitBlockerCoreTests {
         let names = ProxyBlockService.networkServiceNames(fromListOutput: sample)
 
         expect(
-            names == ["Wi-Fi", "Thunderbolt Bridge", "USB 10/100/1000 LAN"],
-            "헤더·오류·비활성 표식을 걸러내고 서비스 이름만 남겨야 합니다. 실제: \(names)"
+            names == ["Wi-Fi", "USB 10/100/1000 LAN"],
+            "헤더·오류·비활성 서비스는 빼고 활성 서비스 이름만 남겨야 합니다. 실제: \(names)"
         )
     }
 
@@ -183,18 +152,23 @@ enum HabitBlockerCoreTests {
     private static func testAdminScriptGeneration() {
         let pacURL = "http://127.0.0.1:47471/proxy-abc123.pac"
 
+        let previousPAC = "http://127.0.0.1:18473/proxy.pac"
         let enableScript = ProxyBlockService.buildAdminScript(
             services: ["Wi-Fi", "USB 10/100/1000 LAN", "Hyun's LAN"],
             pacURLString: pacURL,
-            restore: [:],
-            hostsCleanupContent: nil
+            restore: ["Wi-Fi": .init(url: previousPAC, enabled: true)]
         )
         expect(enableScript.contains("set -e"), "적용 스크립트는 실패 시 중단해야 합니다.")
         expect(enableScript.contains("-setautoproxyurl 'Wi-Fi' '\(pacURL)'"), "서비스 이름을 안전하게 인용해 URL을 설정해야 합니다.")
         expect(enableScript.contains("-setautoproxystate 'Wi-Fi' on"), "자동 프록시를 켜야 합니다.")
         expect(enableScript.contains("'USB 10/100/1000 LAN'"), "공백이 있는 서비스 이름을 인용해야 합니다.")
         expect(enableScript.contains("'Hyun'\\''s LAN'"), "작은따옴표가 있는 서비스 이름을 이스케이프해야 합니다.")
-        expect(!enableScript.contains("/etc/hosts"), "hosts 정리가 필요 없으면 hosts를 건드리지 않아야 합니다.")
+        expect(!enableScript.contains("/etc/hosts"), "관리자 스크립트는 /etc/hosts를 건드리지 않아야 합니다.")
+        expect(enableScript.contains("_hb_pac_ok"), "적용 후 우리 PAC이 켜졌는지 같은 스크립트에서 확인해야 합니다.")
+        expect(enableScript.contains("enabled: yes"), "적용 확인은 URL뿐 아니라 자동 프록시가 켜진 상태여야 한다.")
+        expect(enableScript.contains("/proxy-"), "적용 확인은 우리 PAC 경로를 포함해야 한다.")
+        expect(enableScript.contains(previousPAC), "적용 확인 실패 시 이전 PAC을 같은 권한 세션에서 되돌려야 합니다.")
+        expect(enableScript.contains("previous proxy settings were restored"), "롤백이 일어났음을 스크립트가 남겨야 합니다.")
 
         let restore: [String: ProxyBlockService.ProxyBackupEntry] = [
             "Wi-Fi": .init(url: "http://127.0.0.1:18473/proxy.pac", enabled: true),
@@ -204,27 +178,106 @@ enum HabitBlockerCoreTests {
         let disableScript = ProxyBlockService.buildAdminScript(
             services: ["Wi-Fi", "Thunderbolt Bridge", "Broken LAN", "Ethernet"],
             pacURLString: nil,
-            restore: restore,
-            hostsCleanupContent: nil
+            restore: restore
         )
         expect(disableScript.contains("-setautoproxystate 'Wi-Fi' on"), "백업이 있던 서비스는 이전 상태를 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxyurl 'Wi-Fi' 'http://127.0.0.1:18473/proxy.pac'"), "이전 PAC URL을 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxystate 'Thunderbolt Bridge' off"), "사용 중이 아니던 설정은 꺼진 상태로 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxystate 'Broken LAN' off"), "URL 없이 켜져 있던 비정상 설정은 꺼진 상태로 복원해야 합니다.")
         expect(!disableScript.contains("-setautoproxystate 'Broken LAN' on"), "URL 없는 설정을 켠 상태로 복원하면 안 됩니다.")
-        expect(disableScript.contains("-setautoproxystate 'Ethernet' off"), "백업이 없는 서비스는 자동 프록시를 끕니다.")
+        expect(disableScript.contains("127.0.0.1:\(ProxyBlockService.listenPort)"), "백업이 없는 서비스는 우리 PAC인지 확인한 뒤에만 지워야 합니다.")
         expect(!disableScript.contains("-setautoproxystate 'Ethernet' on"), "백업이 없는 서비스를 켜면 안 됩니다.")
         expect(enableScript.contains("|| true"), "서비스 하나의 실패가 전체 적용을 중단시키지 않아야 합니다.")
+        expect(!disableScript.contains("/etc/hosts"), "해제 스크립트도 /etc/hosts를 건드리지 않아야 합니다.")
+    }
 
-        let cleanupScript = ProxyBlockService.buildAdminScript(
-            services: [],
-            pacURLString: nil,
-            restore: [:],
-            hostsCleanupContent: "127.0.0.1 localhost\n"
+    private static func testProxyBackupMerge() {
+        let ourPAC = "http://127.0.0.1:47471/proxy-abc.pac"
+        let existing: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: "http://corp.example/proxy.pac", enabled: true)
+        ]
+        let current: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: ourPAC, enabled: true),
+            "Ethernet": .init(url: nil, enabled: false)
+        ]
+        let merged = ProxyBlockService.mergingProxyBackup(existing: existing, current: current)
+
+        expect(merged["Wi-Fi"]?.url == "http://corp.example/proxy.pac", "이미 우리 PAC이 켜진 서비스는 이전 사용자 설정을 덮지 않아야 합니다.")
+        expect(merged["Ethernet"]?.enabled == false, "우리 PAC이 아닌 현재 값은 백업에 합쳐야 합니다.")
+    }
+
+    private static func testRestoreSettingsMatch() {
+        let backup: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: "http://corp.example/proxy.pac", enabled: true),
+            "Thunderbolt Bridge": .init(url: nil, enabled: false)
+        ]
+        let restored: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: "http://corp.example/proxy.pac", enabled: true),
+            "Thunderbolt Bridge": .init(url: nil, enabled: false)
+        ]
+        expect(
+            ProxyBlockService.settingsMatchBackup(current: restored, backup: backup, services: ["Wi-Fi", "Thunderbolt Bridge"]),
+            "백업과 같은 프록시 설정은 복원 성공으로 보아야 합니다."
         )
-        expect(cleanupScript.contains("/etc/hosts"), "hosts 정리 내용이 있으면 반영해야 합니다.")
-        expect(cleanupScript.contains("base64 -D"), "hosts 내용은 base64로 전달해야 합니다.")
-        expect(cleanupScript.contains("dscacheutil -flushcache"), "hosts 정리 후 DNS 캐시를 비워야 합니다.")
+
+        let missingPrevious: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: " ", enabled: false),
+            "Thunderbolt Bridge": .init(url: nil, enabled: false)
+        ]
+        expect(
+            !ProxyBlockService.settingsMatchBackup(current: missingPrevious, backup: backup, services: ["Wi-Fi", "Thunderbolt Bridge"]),
+            "이전 PAC URL이 비어 있으면 복원 실패여야 합니다."
+        )
+
+        let leftoverOurs: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Ethernet": .init(url: "http://127.0.0.1:47471/proxy-abc.pac", enabled: true)
+        ]
+        expect(
+            !ProxyBlockService.settingsMatchBackup(current: leftoverOurs, backup: [:], services: ["Ethernet"]),
+            "백업이 없는 서비스에 우리 PAC이 남아 있으면 실패여야 합니다."
+        )
+        expect(
+            ProxyBlockService.settingsMatchBackup(current: [:], backup: backup, services: ["USB LAN"]),
+            "지금은 없는 서비스 때문에 복원 전체를 실패로 보면 안 됩니다."
+        )
+        expect(
+            !ProxyBlockService.settingsMatchBackup(current: [:], backup: backup, services: ["Wi-Fi"]),
+            "백업이 있는 서비스 상태를 읽지 못하면 복원 실패여야 합니다."
+        )
+    }
+
+    private static func testProxyBackupPersistence() {
+        let defaultsSuite = "HabitBlockerProxyBackupTests-\(UUID().uuidString)"
+        let emptySuite = "HabitBlockerProxyBackupEmpty-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsSuite)!
+        let emptyDefaults = UserDefaults(suiteName: emptySuite)!
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HabitBlocker-proxy-backup-\(UUID().uuidString).json")
+        defer {
+            defaults.removePersistentDomain(forName: defaultsSuite)
+            emptyDefaults.removePersistentDomain(forName: emptySuite)
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        let backup: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: "http://corp.example/proxy.pac", enabled: true)
+        ]
+        ProxyBlockService.saveProxyBackup(backup, defaults: defaults, fileURL: fileURL)
+
+        let fromFile = ProxyBlockService.readProxyBackup(defaults: emptyDefaults, fileURL: fileURL)
+        expect(fromFile["Wi-Fi"]?.url == "http://corp.example/proxy.pac", "UserDefaults가 비어도 파일 백업을 읽어야 합니다.")
+
+        let missingFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HabitBlocker-proxy-backup-missing-\(UUID().uuidString).json")
+        let fromDefaults = ProxyBlockService.readProxyBackup(defaults: defaults, fileURL: missingFile)
+        expect(fromDefaults["Wi-Fi"]?.enabled == true, "파일이 없으면 UserDefaults 백업을 읽어야 합니다.")
+
+        ProxyBlockService.clearProxyBackup(defaults: defaults, fileURL: fileURL)
+        expect(
+            ProxyBlockService.readProxyBackup(defaults: defaults, fileURL: fileURL).isEmpty,
+            "백업 삭제는 파일과 UserDefaults를 모두 지워야 합니다."
+        )
+        expect(!(FileManager.default.fileExists(atPath: fileURL.path)), "백업 파일이 삭제되어야 합니다.")
     }
 
     private static func testPacRequestDetection() {
@@ -235,6 +288,10 @@ enum HabitBlockerCoreTests {
         expect(
             ProxyBlockService.isPacRequest("GET http://127.0.0.1:47471/proxy-abc123.pac HTTP/1.1"),
             "절대 형식 PAC 요청을 인식해야 합니다."
+        )
+        expect(
+            ProxyBlockService.isPacRequest("GET /proxy-abc123.pac?t=1 HTTP/1.1"),
+            "쿼리스트링이 있는 PAC 요청도 인식해야 합니다."
         )
         expect(
             !ProxyBlockService.isPacRequest("CONNECT youtube.com:443 HTTP/1.1"),

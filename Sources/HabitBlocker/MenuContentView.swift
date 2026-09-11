@@ -51,7 +51,7 @@ struct MenuContentView: View {
                 set: { store.setBlocked($0) }
             ))
             .toggleStyle(.switch)
-            .disabled(store.isApplying || store.sites.isEmpty || store.isUnlockPending)
+            .disabled(store.isApplying || store.isUnlockPending || (store.sites.isEmpty && !store.isBlocked))
 
             if store.isBlocked {
                 HStack(alignment: .top, spacing: 8) {
