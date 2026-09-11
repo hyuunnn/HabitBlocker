@@ -92,7 +92,11 @@ final class BlockerStore: ObservableObject {
         unlockReadyAt = UserDefaults.standard.object(forKey: unlockReadyKey) as? Date
         let savedDelay = UserDefaults.standard.integer(forKey: unlockDelayKey)
         unlockDelaySeconds = [30, 60, 300].contains(savedDelay) ? savedDelay : 60
-        isBlocked = HostFileService.isManagedBlockActive()
+
+        ProxyBlockService.startRejectListener()
+        // 차단 중에 앱을 다시 실행했다면 마지막 적용 목록으로 PAC을 즉시 복구한다.
+        ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
+        isBlocked = ProxyBlockService.isBlockActive()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         scheduleFocusEndIfNeeded()
         scheduleUnlockWaitIfNeeded()
@@ -124,7 +128,7 @@ final class BlockerStore: ObservableObject {
         }
 
         clearUnlockWait()
-        performHostUpdate(shouldBlock: shouldBlock) { [weak self] succeeded in
+        performBlockUpdate(shouldBlock: shouldBlock) { [weak self] succeeded in
             guard let self, succeeded else { return }
             self.setStatus(shouldBlock ? "등록 사이트 차단을 켰습니다." : "등록 사이트 차단을 해제했습니다.", error: false)
         }
@@ -157,7 +161,7 @@ final class BlockerStore: ObservableObject {
             return
         }
 
-        performHostUpdate(shouldBlock: false) { [weak self] succeeded in
+        performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
             guard let self, succeeded else { return }
             self.recordActivity(.unblocked)
             self.clearUnlockWait()
@@ -167,7 +171,7 @@ final class BlockerStore: ObservableObject {
 
     func applyCurrentRules() {
         guard isBlocked, !isUnlockPending else { return }
-        performHostUpdate(shouldBlock: true)
+        performBlockUpdate(shouldBlock: true)
     }
 
     func showFocusValidationError() {
@@ -185,7 +189,7 @@ final class BlockerStore: ObservableObject {
         }
 
         focusEndDate = Date().addingTimeInterval(TimeInterval(minutes * 60))
-        performHostUpdate(shouldBlock: true) { [weak self] succeeded in
+        performBlockUpdate(shouldBlock: true) { [weak self] succeeded in
             guard let self else { return }
             if succeeded {
                 self.recordActivity(.focusStarted, minutes: minutes)
@@ -204,10 +208,16 @@ final class BlockerStore: ObservableObject {
     }
 
     func refreshSystemState() {
-        isBlocked = HostFileService.isManagedBlockActive()
+        isBlocked = ProxyBlockService.isBlockActive()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if isBlocked {
-            setStatus("현재 hosts 파일에 습관 차단기 규칙이 적용되어 있습니다.", error: false)
+            // 설정만 남고 리스너가 없는 상태(수동 재활성 등)를 막기 위해 차단 중이면 항상 보증한다.
+            ProxyBlockService.startRejectListener()
+        }
+        if HostFileService.isLegacySectionPresent() {
+            setStatus("이전 버전의 hosts 차단 규칙이 남아 있습니다. 차단을 한 번 해제하면 자동으로 정리됩니다.", error: false)
+        } else if isBlocked {
+            setStatus("시스템 프록시 규칙으로 등록 사이트가 차단되어 있습니다.", error: false)
         } else {
             clearUnlockWait()
             setStatus("현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
@@ -237,26 +247,28 @@ final class BlockerStore: ObservableObject {
         }
     }
 
-    private func performHostUpdate(shouldBlock: Bool, completion: @escaping (Bool) -> Void = { _ in }) {
+    private func performBlockUpdate(shouldBlock: Bool, completion: @escaping (Bool) -> Void = { _ in }) {
         isApplying = true
         setStatus("관리자 권한 확인을 기다리는 중입니다…", error: false)
         let domains = sites.map(\.domain)
 
         Task {
             do {
-                try await HostFileService.updateHosts(shouldBlock: shouldBlock, domains: domains)
+                try await ProxyBlockService.apply(shouldBlock: shouldBlock, domains: domains)
                 isBlocked = shouldBlock
                 isApplying = false
                 if !shouldBlock {
                     focusEndDate = nil
                 }
-                if statusMessage.contains("관리자 권한") {
+                if shouldBlock, !ProxyBlockService.isListenerRunning {
+                    setStatus("차단 규칙은 적용됐지만 로컬 응답 서버를 시작하지 못했습니다. 차단 사이트는 브라우저 기본 오류 화면으로 표시됩니다.", error: true)
+                } else if statusMessage.contains("관리자 권한") {
                     setStatus(shouldBlock ? "차단 규칙을 적용했습니다." : "차단을 해제했습니다.", error: false)
                 }
                 completion(true)
             } catch {
                 isApplying = false
-                isBlocked = HostFileService.isManagedBlockActive()
+                isBlocked = ProxyBlockService.isBlockActive()
                 setStatus("변경하지 못했습니다: \(error.localizedDescription)", error: true)
                 completion(false)
             }
@@ -269,7 +281,7 @@ final class BlockerStore: ObservableObject {
         if remaining <= 0 {
             self.focusEndDate = nil
             if isBlocked {
-                performHostUpdate(shouldBlock: false) { [weak self] succeeded in
+                performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
                     if succeeded { self?.recordActivity(.focusCompleted) }
                 }
             }
@@ -281,7 +293,7 @@ final class BlockerStore: ObservableObject {
             guard let self, let endDate = self.focusEndDate, endDate <= Date() else { return }
             self.focusEndDate = nil
             if self.isBlocked {
-                self.performHostUpdate(shouldBlock: false) { [weak self] succeeded in
+                self.performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
                     guard let self, succeeded else { return }
                     self.recordActivity(.focusCompleted)
                     self.clearUnlockWait()
