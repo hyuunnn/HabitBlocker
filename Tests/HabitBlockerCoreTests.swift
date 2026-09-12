@@ -67,17 +67,9 @@ enum HabitBlockerCoreTests {
     }
 
     private static func testHostnameExpansion() {
-        let expectedYouTubeHosts: Set<String> = [
-            "youtube.com",
-            "www.youtube.com",
-            "m.youtube.com",
-            "music.youtube.com",
-            "studio.youtube.com",
-            "youtu.be"
-        ]
         expect(
-            Set(DomainNormalizer.hostnames(for: ["youtube.com"])) == expectedYouTubeHosts,
-            "YouTube 등록은 알려진 보조 도메인도 함께 확장해야 합니다."
+            DomainNormalizer.hostnames(for: ["youtube.com"]) == ["www.youtube.com", "youtube.com"],
+            "모든 도메인은 루트와 www 호스트만 생성해야 합니다."
         )
         expect(
             DomainNormalizer.hostnames(for: ["example.com"]) == ["example.com", "www.example.com"],
@@ -117,7 +109,7 @@ enum HabitBlockerCoreTests {
         expect(proxyFor("youtube.com") == blockedResult, "루트 도메인을 차단해야 합니다.")
         expect(proxyFor("www.youtube.com") == blockedResult, "www 하위 도메인을 차단해야 합니다.")
         expect(proxyFor("v.youtube.com") == blockedResult, "임의의 하위 도메인을 접미사 규칙으로 차단해야 합니다.")
-        expect(proxyFor("youtu.be") == blockedResult, "YouTube 보조 도메인을 차단해야 합니다.")
+        expect(proxyFor("youtu.be") == "DIRECT", "등록하지 않은 별도 도메인은 직접 연결해야 합니다.")
         expect(proxyFor("example.com") == blockedResult, "일반 등록 도메인을 차단해야 합니다.")
         expect(proxyFor("docs.example.com") == blockedResult, "일반 도메인의 하위 도메인도 차단해야 합니다.")
         expect(proxyFor("YOUTUBE.COM") == blockedResult, "대문자 호스트를 소문자로 정규화해야 합니다.")

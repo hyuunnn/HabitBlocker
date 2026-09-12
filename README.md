@@ -57,7 +57,6 @@ The standard block toggle is immediate. The unlock wait applies only when ending
 | Menu bar control | Manage status, block lists, focus sessions, unlock waits, and summaries from a single SwiftUI popover. |
 | Domain and URL input | Accepts domain names and full URLs, extracting the host safely. |
 | System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never reads or writes `/etc/hosts`. |
-| YouTube expansion | Adding `youtube.com` also blocks `www`, `m`, `music`, `studio`, and `youtu.be`. |
 | Focus sessions | Can start only while blocking is off. Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
 | Unlock wait | Always shown under Focus. The 30-second, 1-minute, or 5-minute delay can be changed only while blocking is off, and applies only when ending a focus session. |
 | Local summary | Shows today’s focus starts, planned focus minutes, and unlock attempts. Activity data stays on this Mac and is pruned after 90 days. |
@@ -79,7 +78,7 @@ The core test suite covers the logic that can be safely verified without adminis
 | Area | Covered behavior |
 |---|---|
 | Domain normalization | URL host extraction, case normalization, IDN/punycode handling, and invalid-input rejection. |
-| Hostname expansion | Standard `www` aliases and YouTube-specific aliases. |
+| Hostname expansion | Root domain and `www` alias. |
 | PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, case/FQDN handling, and punycode (IDN) matching. |
 | Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output. |
 | Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and same-session rollback. |

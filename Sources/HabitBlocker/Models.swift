@@ -75,9 +75,6 @@ enum DomainNormalizer {
             if !host.hasPrefix("www.") {
                 result.insert("www.\(host)")
             }
-            if host == "youtube.com" || host == "www.youtube.com" {
-                result.formUnion(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtu.be"])
-            }
         }
         return result.sorted()
     }
