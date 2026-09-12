@@ -331,13 +331,15 @@ struct MenuContentView: View {
     }
 
     /// SwiftUI TextField 바인딩은 한글 IME 조합 중인 글자를 빼먹는다.
-    /// 화면에 보이는 필드 에디터 문자열을 그대로 쓴다.
+    /// 화면에 보이는 문자열을 쓰되, 사이트 칸과 이어진 텍스트일 때만 채택한다.
     private func committedSiteInput() -> String {
-        if let textView = siteFieldEditor() {
-            let visible = textView.string
-            if !visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return visible
-            }
+        guard let visible = siteFieldEditor()?.string,
+              !visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return newSite
+        }
+        // 조합 중이면 바인딩이 보이는 값의 접두어가 된다. 분 입력칸 등 다른 필드는 여기서 걸러진다.
+        if newSite.isEmpty || visible.hasPrefix(newSite) || newSite.hasPrefix(visible) {
+            return visible
         }
         return newSite
     }
