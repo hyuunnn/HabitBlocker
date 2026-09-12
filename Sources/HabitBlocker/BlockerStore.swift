@@ -120,22 +120,24 @@ final class BlockerStore: ObservableObject {
         scheduleUnlockWaitIfNeeded()
     }
 
-    func addSite(_ rawValue: String) {
+    @discardableResult
+    func addSite(_ rawValue: String) -> Bool {
         if isBlocked || isApplying {
             setStatus("차단이 켜져 있을 때는 목록을 바꿀 수 없습니다.", error: true)
-            return
+            return false
         }
         guard let domain = DomainNormalizer.normalize(rawValue) else {
             setStatus("유효한 도메인 또는 URL을 입력하세요.", error: true)
-            return
+            return false
         }
         guard !sites.contains(where: { $0.domain == domain }) else {
             setStatus("\(domain)은(는) 이미 목록에 있습니다.", error: true)
-            return
+            return false
         }
 
         sites.append(BlockedSite(domain: domain))
         setStatus("\(domain)을(를) 목록에 추가했습니다.", error: false)
+        return true
     }
 
     func remove(_ site: BlockedSite) {

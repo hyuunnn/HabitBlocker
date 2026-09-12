@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -126,6 +127,7 @@ struct MenuContentView: View {
                 Button(action: addSite) {
                     Image(systemName: "plus")
                 }
+                .focusable(false)
                 .disabled(store.isBlocked || store.isApplying || newSite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("사이트 추가")
             }
@@ -320,8 +322,31 @@ struct MenuContentView: View {
     }
 
     private func addSite() {
-        store.addSite(newSite)
-        newSite = ""
+        let input = committedSiteInput()
+        if store.addSite(input) {
+            newSite = ""
+        } else {
+            newSite = input
+        }
+    }
+
+    /// SwiftUI TextField 바인딩은 한글 IME 조합 중인 글자를 빼먹는다.
+    /// 화면에 보이는 필드 에디터 문자열을 그대로 쓴다.
+    private func committedSiteInput() -> String {
+        if let textView = siteFieldEditor() {
+            let visible = textView.string
+            if !visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return visible
+            }
+        }
+        return newSite
+    }
+
+    private func siteFieldEditor() -> NSTextView? {
+        if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+            return textView
+        }
+        return NSApp.windows.lazy.compactMap { $0.firstResponder as? NSTextView }.first
     }
 }
 

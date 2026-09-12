@@ -48,6 +48,22 @@ enum HabitBlockerCoreTests {
             DomainNormalizer.normalize("not a domain") == nil,
             "공백이 있는 잘못된 입력을 거부해야 합니다."
         )
+        expect(
+            DomainNormalizer.normalize("한글도메인.com") == "한글도메인.com",
+            "국제화 도메인은 목록 표시용 유니코드로 정규화해야 합니다."
+        )
+        expect(
+            DomainNormalizer.normalize("xn--bj0bj3i97fq8o5lq.com") == "한글도메인.com",
+            "punycode 입력도 같은 유니코드 호스트로 정규화해야 합니다."
+        )
+        expect(
+            DomainNormalizer.normalize("내도메인.한국") == "내도메인.한국",
+            "한글 TLD가 잘리면 안 됩니다."
+        )
+        expect(
+            DomainNormalizer.normalize("https://xn--220b31d95hq8o.xn--3e0b707e/") == "내도메인.한국",
+            "한글 TLD punycode URL도 같은 호스트로 정규화해야 합니다."
+        )
     }
 
     private static func testHostnameExpansion() {
@@ -81,7 +97,7 @@ enum HabitBlockerCoreTests {
 
     private static func testPacScriptMatching() {
         let script = ProxyBlockService.pacScript(
-            hostnames: DomainNormalizer.hostnames(for: ["youtube.com", "example.com"])
+            hostnames: DomainNormalizer.hostnames(for: ["youtube.com", "example.com", "한글도메인.com"])
         )
         guard let context = JSContext() else {
             expect(false, "JavaScriptCore 컨텍스트를 만들 수 없습니다.")
@@ -110,6 +126,7 @@ enum HabitBlockerCoreTests {
         expect(proxyFor("notyoutube.com") == "DIRECT", "접미사 오탐(notyoutube.com)을 방지해야 합니다.")
         expect(proxyFor("example.com.evil.net") == "DIRECT", "접미사 오탐(example.com.evil.net)을 방지해야 합니다.")
         expect(proxyFor("google.com") == "DIRECT", "미등록 도메인은 직접 연결해야 합니다.")
+        expect(proxyFor("xn--bj0bj3i97fq8o5lq.com") == blockedResult, "브라우저가 넘기는 punycode 호스트를 차단해야 합니다.")
     }
 
     private static func testNetworkServiceNameParsing() {

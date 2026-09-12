@@ -78,9 +78,9 @@ The core test suite covers the logic that can be safely verified without adminis
 
 | Area | Covered behavior |
 |---|---|
-| Domain normalization | URL host extraction, case normalization, and invalid-input rejection. |
+| Domain normalization | URL host extraction, case normalization, IDN/punycode handling, and invalid-input rejection. |
 | Hostname expansion | Standard `www` aliases and YouTube-specific aliases. |
-| PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, and case/FQDN handling. |
+| PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, case/FQDN handling, and punycode (IDN) matching. |
 | Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output. |
 | Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and same-session rollback. |
 

@@ -43,25 +43,39 @@ enum DomainNormalizer {
             host = String(host.dropFirst(4))
         }
 
-        guard host.contains("."), host != "localhost", host.allSatisfy({ character in
-            character.isLetter || character.isNumber || character == "." || character == "-"
-        }) else {
+        // URLComponents.host는 IDN을 유니코드로 돌려준다. PAC에는 punycode가 필요하므로
+        // ASCII 변환이 되는 호스트만 목록에 넣는다.
+        guard asciiHostname(host) != nil else { return nil }
+        return host
+    }
+
+    private static func asciiHostname(_ host: String) -> String? {
+        // URL(string:)는 macOS 14부터 IDN을 ACE로 인코딩한다. 최소 지원은 13이므로
+        // URLComponents로 만든 URL.host를 쓴다.
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        guard let ascii = components.url?.host?.lowercased(),
+              ascii.contains("."),
+              ascii.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }) else {
             return nil
         }
-
-        let labels = host.split(separator: ".")
-        guard labels.allSatisfy({ !$0.isEmpty && !$0.hasPrefix("-") && !$0.hasSuffix("-") }) else { return nil }
-        return host
+        let labels = ascii.split(separator: ".")
+        guard labels.allSatisfy({ !$0.isEmpty && !$0.hasPrefix("-") && !$0.hasSuffix("-") }) else {
+            return nil
+        }
+        return ascii
     }
 
     static func hostnames(for domains: [String]) -> [String] {
         var result = Set<String>()
         for domain in domains {
-            result.insert(domain)
-            if !domain.hasPrefix("www.") {
-                result.insert("www.\(domain)")
+            guard let host = asciiHostname(domain) else { continue }
+            result.insert(host)
+            if !host.hasPrefix("www.") {
+                result.insert("www.\(host)")
             }
-            if domain == "youtube.com" || domain == "www.youtube.com" {
+            if host == "youtube.com" || host == "www.youtube.com" {
                 result.formUnion(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "studio.youtube.com", "youtu.be"])
             }
         }
