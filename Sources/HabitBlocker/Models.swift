@@ -72,9 +72,6 @@ enum DomainNormalizer {
         for domain in domains {
             guard let host = asciiHostname(domain) else { continue }
             result.insert(host)
-            if !host.hasPrefix("www.") {
-                result.insert("www.\(host)")
-            }
         }
         return result.sorted()
     }

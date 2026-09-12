@@ -8,7 +8,7 @@ enum HabitBlockerCoreTests {
 
     static func main() {
         testDomainNormalization()
-        testHostnameExpansion()
+        testHostnameEncoding()
         testPacScriptGeneration()
         testPacScriptMatching()
         testNetworkServiceNameParsing()
@@ -66,14 +66,18 @@ enum HabitBlockerCoreTests {
         )
     }
 
-    private static func testHostnameExpansion() {
+    private static func testHostnameEncoding() {
         expect(
-            DomainNormalizer.hostnames(for: ["youtube.com"]) == ["www.youtube.com", "youtube.com"],
-            "모든 도메인은 루트와 www 호스트만 생성해야 합니다."
+            DomainNormalizer.hostnames(for: ["youtube.com"]) == ["youtube.com"],
+            "ASCII 도메인은 그대로 PAC 호스트가 되어야 합니다."
         )
         expect(
-            DomainNormalizer.hostnames(for: ["example.com"]) == ["example.com", "www.example.com"],
-            "일반 도메인은 루트와 www 호스트를 생성해야 합니다."
+            DomainNormalizer.hostnames(for: ["한글도메인.com"]) == ["xn--bj0bj3i97fq8o5lq.com"],
+            "국제화 도메인은 PAC용 punycode로 변환해야 합니다."
+        )
+        expect(
+            DomainNormalizer.hostnames(for: ["한글도메인.com", "xn--bj0bj3i97fq8o5lq.com"]) == ["xn--bj0bj3i97fq8o5lq.com"],
+            "같은 호스트의 유니코드와 punycode는 하나로 합쳐야 합니다."
         )
     }
 
