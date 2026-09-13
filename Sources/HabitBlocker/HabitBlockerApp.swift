@@ -36,11 +36,11 @@ final class HabitBlockerAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func isSystemPowerOff(_ event: NSAppleEventDescriptor?) -> Bool {
-        guard let why = event?.attributeDescriptor(forKeyword: AEKeyword(0x77687920)) else {
+        guard let why = event?.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason)) else {
             return false
         }
         switch why.typeCodeValue {
-        case 0x73687574, 0x72657374, 0x6C6F676F: // 'shut' 'rest' 'logo'
+        case OSType(kAEShutDown), OSType(kAERestart), OSType(kAELogOut):
             return true
         default:
             return false
