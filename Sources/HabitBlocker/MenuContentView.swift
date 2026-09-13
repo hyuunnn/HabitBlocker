@@ -137,28 +137,30 @@ struct MenuContentView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(store.sites) { site in
-                        HStack(spacing: 8) {
-                            Image(systemName: "globe")
-                                .foregroundStyle(.secondary)
-                            Text(site.domain)
-                                .lineLimit(1)
-                            Spacer()
-                            Button {
-                                store.remove(site)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(store.sites) { site in
+                            HStack(spacing: 8) {
+                                Image(systemName: "globe")
                                     .foregroundStyle(.secondary)
+                                Text(site.domain)
+                                    .lineLimit(1)
+                                Spacer()
+                                Button {
+                                    store.remove(site)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(store.isBlocked || store.isApplying)
+                                .help("목록에서 제거")
                             }
-                            .buttonStyle(.plain)
-                            .disabled(store.isBlocked || store.isApplying)
-                            .help("목록에서 제거")
-                        }
-                        .padding(.vertical, 6)
+                            .padding(.vertical, 6)
 
-                        if site.id != store.sites.last?.id {
-                            Divider()
+                            if site.id != store.sites.last?.id {
+                                Divider()
+                            }
                         }
                     }
                 }
