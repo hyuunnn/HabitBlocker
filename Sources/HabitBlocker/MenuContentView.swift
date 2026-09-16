@@ -266,7 +266,7 @@ struct MenuContentView: View {
 
             HStack(spacing: 8) {
                 MetricView(value: "\(store.todayFocusSessionCount)회", label: "집중 시작")
-                MetricView(value: "\(store.todayPlannedFocusMinutes)분", label: "설정 시간")
+                MetricView(value: "\(store.todayFocusMinutes)분", label: "집중 시간")
                 MetricView(value: "\(store.todayUnlockAttemptCount)회", label: "해제 시도")
             }
 

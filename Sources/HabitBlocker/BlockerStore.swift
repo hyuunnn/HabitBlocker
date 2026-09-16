@@ -14,6 +14,9 @@ final class BlockerStore: ObservableObject {
     @Published private(set) var focusEndDate: Date? {
         didSet { saveFocusEndDate() }
     }
+    @Published private(set) var focusStartedAt: Date? {
+        didSet { saveFocusStartedAt() }
+    }
     @Published private(set) var unlockReadyAt: Date? {
         didSet { saveUnlockReadyDate() }
     }
@@ -30,6 +33,7 @@ final class BlockerStore: ObservableObject {
 
     private let sitesKey = "blockedSites"
     private let focusEndKey = "focusEndDate"
+    private let focusStartedKey = "focusStartedAt"
     private let unlockReadyKey = "unlockReadyAt"
     private let unlockDelayKey = "unlockDelaySeconds"
     private let activityEventsKey = "habitActivityEvents"
@@ -81,9 +85,12 @@ final class BlockerStore: ObservableObject {
         activityEvents.filter { $0.kind == .focusStarted && Calendar.current.isDateInToday($0.timestamp) }.count
     }
 
-    var todayPlannedFocusMinutes: Int {
+    var todayFocusMinutes: Int {
         activityEvents
-            .filter { $0.kind == .focusStarted && Calendar.current.isDateInToday($0.timestamp) }
+            .filter {
+                ($0.kind == .focusCompleted || $0.kind == .unblocked)
+                    && Calendar.current.isDateInToday($0.timestamp)
+            }
             .reduce(0) { $0 + ($1.minutes ?? 0) }
     }
 
@@ -93,7 +100,7 @@ final class BlockerStore: ObservableObject {
 
     var latestUnlockAttempt: HabitActivity? {
         activityEvents
-            .filter { $0.kind == .unlockRequested }
+            .filter { $0.kind == .unlockRequested && Calendar.current.isDateInToday($0.timestamp) }
             .max(by: { $0.timestamp < $1.timestamp })
     }
 
@@ -101,6 +108,7 @@ final class BlockerStore: ObservableObject {
         loadSites()
         loadActivityEvents()
         focusEndDate = UserDefaults.standard.object(forKey: focusEndKey) as? Date
+        focusStartedAt = UserDefaults.standard.object(forKey: focusStartedKey) as? Date
         unlockReadyAt = UserDefaults.standard.object(forKey: unlockReadyKey) as? Date
         let savedDelay = UserDefaults.standard.integer(forKey: unlockDelayKey)
         unlockDelaySeconds = [30, 60, 300].contains(savedDelay) ? savedDelay : 60
@@ -114,7 +122,7 @@ final class BlockerStore: ObservableObject {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if !isBlocked {
             clearUnlockWait()
-            focusEndDate = nil
+            clearFocusSession()
         }
         scheduleFocusEndIfNeeded()
         scheduleUnlockWaitIfNeeded()
@@ -163,7 +171,10 @@ final class BlockerStore: ObservableObject {
             return
         }
 
-        performBlockUpdate(shouldBlock: shouldBlock)
+        performBlockUpdate(shouldBlock: shouldBlock) { [weak self] succeeded in
+            guard let self, succeeded, !shouldBlock else { return }
+            self.recordElapsedFocus(as: .unblocked)
+        }
     }
 
     func setUnlockDelay(seconds: Int) {
@@ -190,6 +201,7 @@ final class BlockerStore: ObservableObject {
         let focusAlreadyEnded = focusEndDate.map { $0 <= Date() } ?? false
         clearUnlockWait()
         if focusAlreadyEnded {
+            recordElapsedFocus(as: .focusCompleted)
             focusEndDate = nil
             setStatus("차단 해제를 취소하고 차단을 유지합니다.", error: false)
         } else {
@@ -205,7 +217,7 @@ final class BlockerStore: ObservableObject {
 
         performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
             guard let self, succeeded else { return }
-            self.recordActivity(.unblocked)
+            self.recordElapsedFocus(as: .unblocked)
             self.clearUnlockWait()
             self.setStatus("차단을 해제했습니다.", error: false)
         }
@@ -228,18 +240,20 @@ final class BlockerStore: ObservableObject {
             return
         }
 
-        focusEndDate = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        let startedAt = Date()
+        focusStartedAt = startedAt
+        focusEndDate = startedAt.addingTimeInterval(TimeInterval(minutes * 60))
         performBlockUpdate(shouldBlock: true) { [weak self] succeeded in
             guard let self else { return }
             if succeeded {
-                self.recordActivity(.focusStarted, minutes: minutes)
+                self.recordActivity(.focusStarted)
                 self.scheduleFocusEndIfNeeded()
                 if !self.statusIsError {
                     self.setStatus("\(minutes)분 집중 세션을 시작했습니다.", error: false)
                 }
                 self.showFocusNotification()
             } else {
-                self.focusEndDate = nil
+                self.clearFocusSession()
             }
         }
     }
@@ -274,7 +288,7 @@ final class BlockerStore: ObservableObject {
             setStatus("시스템 프록시 규칙으로 등록 사이트가 차단되어 있습니다.", error: false)
         } else {
             clearUnlockWait()
-            focusEndDate = nil
+            clearFocusSession()
             setStatus("현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
         }
     }
@@ -353,11 +367,11 @@ final class BlockerStore: ObservableObject {
         if isBlocked {
             performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
                 guard let self, succeeded else { return }
-                self.recordActivity(.focusCompleted)
+                self.recordElapsedFocus(as: .focusCompleted)
                 self.setStatus("집중 시간이 끝나 차단을 해제했습니다.", error: false)
             }
         } else {
-            focusEndDate = nil
+            clearFocusSession()
         }
     }
 
@@ -396,10 +410,20 @@ final class BlockerStore: ObservableObject {
         unlockSecondsRemaining = 0
     }
 
+    private func clearFocusSession() {
+        focusEndDate = nil
+        focusStartedAt = nil
+    }
+
+    private func recordElapsedFocus(as kind: HabitActivityKind) {
+        guard let start = focusStartedAt else { return }
+        recordActivity(kind, minutes: FocusDuration.elapsedMinutes(from: start))
+        focusStartedAt = nil
+    }
+
     private func recordActivity(_ kind: HabitActivityKind, minutes: Int? = nil) {
         activityEvents.append(HabitActivity(kind: kind, minutes: minutes))
-        let cutoff = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? .distantPast
-        activityEvents.removeAll { $0.timestamp < cutoff }
+        dropActivityBeforeToday()
     }
 
     private func loadSites() {
@@ -415,6 +439,11 @@ final class BlockerStore: ObservableObject {
     private func loadActivityEvents() {
         guard let data = UserDefaults.standard.data(forKey: activityEventsKey) else { return }
         activityEvents = (try? JSONDecoder().decode([HabitActivity].self, from: data)) ?? []
+        dropActivityBeforeToday()
+    }
+
+    private func dropActivityBeforeToday() {
+        activityEvents.removeAll { !Calendar.current.isDateInToday($0.timestamp) }
     }
 
     private func saveActivityEvents() {
@@ -427,6 +456,14 @@ final class BlockerStore: ObservableObject {
             UserDefaults.standard.set(focusEndDate, forKey: focusEndKey)
         } else {
             UserDefaults.standard.removeObject(forKey: focusEndKey)
+        }
+    }
+
+    private func saveFocusStartedAt() {
+        if let focusStartedAt {
+            UserDefaults.standard.set(focusStartedAt, forKey: focusStartedKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: focusStartedKey)
         }
     }
 

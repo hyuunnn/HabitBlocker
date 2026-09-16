@@ -7,6 +7,7 @@ enum HabitBlockerCoreTests {
     private static var failures = 0
 
     static func main() {
+        testFocusElapsedMinutes()
         testDomainNormalization()
         testHostnameEncoding()
         testPacScriptGeneration()
@@ -25,6 +26,26 @@ enum HabitBlockerCoreTests {
             print("❌ \(failures) core test(s) failed")
             exit(1)
         }
+    }
+
+    private static func testFocusElapsedMinutes() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        expect(
+            FocusDuration.elapsedMinutes(from: start, to: start.addingTimeInterval(10 * 60)) == 10,
+            "10분은 10분으로 기록해야 합니다."
+        )
+        expect(
+            FocusDuration.elapsedMinutes(from: start, to: start.addingTimeInterval(10 * 60 + 59)) == 10,
+            "10분 59초는 10분으로 내려야 합니다."
+        )
+        expect(
+            FocusDuration.elapsedMinutes(from: start, to: start.addingTimeInterval(25 * 60)) == 25,
+            "끝까지 유지한 설정 시간은 그대로 기록해야 합니다."
+        )
+        expect(
+            FocusDuration.elapsedMinutes(from: start, to: start.addingTimeInterval(-30)) == 0,
+            "시작보다 이른 시각은 0분이어야 합니다."
+        )
     }
 
     private static func testDomainNormalization() {

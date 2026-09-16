@@ -59,7 +59,7 @@ The standard block toggle is immediate. The unlock wait applies only when ending
 | System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never reads or writes `/etc/hosts`. |
 | Focus sessions | Can start only while blocking is off. Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
 | Unlock wait | Always shown under Focus. The 30-second, 1-minute, or 5-minute delay can be changed only while blocking is off, and applies only when ending a focus session. |
-| Local summary | Shows today’s focus starts, planned focus minutes, and unlock attempts. Activity data stays on this Mac and is pruned after 90 days. |
+| Local summary | Shows today’s focus starts, actual focused minutes, and unlock attempts. Activity data stays on this Mac and only today’s events are kept. |
 | Focus messages | Displays encouragement inside the app and can send a macOS notification when permission is granted. |
 | Launch at login | Uses the macOS login-item service to launch from the menu bar after sign-in. |
 

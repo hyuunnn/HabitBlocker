@@ -31,6 +31,12 @@ struct HabitActivity: Codable, Identifiable {
     }
 }
 
+enum FocusDuration {
+    static func elapsedMinutes(from start: Date, to end: Date = Date()) -> Int {
+        max(0, Int(end.timeIntervalSince(start) / 60))
+    }
+}
+
 enum DomainNormalizer {
     static func normalize(_ rawValue: String) -> String? {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
