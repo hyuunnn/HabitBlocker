@@ -217,6 +217,7 @@ enum HabitBlockerCoreTests {
         expect(disableScript.contains("-setautoproxystate 'Wi-Fi' on"), "백업이 있던 서비스는 이전 상태를 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxyurl 'Wi-Fi' 'http://127.0.0.1:18473/proxy.pac'"), "이전 PAC URL을 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxystate 'Thunderbolt Bridge' off"), "사용 중이 아니던 설정은 꺼진 상태로 복원해야 합니다.")
+        expect(disableScript.contains("-setautoproxyurl 'Thunderbolt Bridge' ' '"), "URL이 없던 서비스에도 남은 우리 PAC URL은 지워야 합니다.")
         expect(disableScript.contains("-setautoproxystate 'Broken LAN' off"), "URL 없이 켜져 있던 비정상 설정은 꺼진 상태로 복원해야 합니다.")
         expect(!disableScript.contains("-setautoproxystate 'Broken LAN' on"), "URL 없는 설정을 켠 상태로 복원하면 안 됩니다.")
         expect(disableScript.contains("127.0.0.1:\(ProxyBlockService.listenPort)"), "백업이 없는 서비스는 우리 PAC인지 확인한 뒤에만 지워야 합니다.")

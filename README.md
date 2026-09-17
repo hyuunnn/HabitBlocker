@@ -108,7 +108,7 @@ HabitBlocker is a lightweight behavior-change tool, not a security product. Bloc
 |---|---|
 | 1 | The app builds a PAC script from the block list, and a loopback-only (127.0.0.1) listener serves that script. |
 | 2 | Each network service's proxy auto-configuration points at this PAC URL. Previous proxy settings are saved to disk before any change. If the new PAC cannot be verified, the same administrator script restores those settings. Unblock succeeds only after the previous settings are confirmed. |
-| 3 | The PAC routes only blocked domains to the local listener, which answers with a 403 block page. Everything else connects directly (DIRECT). |
+| 3 | The PAC routes only blocked domains to the local listener, which answers with a 403. Everything else connects directly (DIRECT). |
 | 4 | DNS and `/etc/hosts` are never used, so name resolution and local services stay intact. The worst case of a PAC misconfiguration is "blocking does not happen". |
 
 Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before any DNS query happens, so it is more robust against secure DNS than a hosts-file approach.
@@ -121,6 +121,7 @@ Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before a
 | Clients that ignore the system proxy | Most browsers follow the system proxy, but some CLI tools (curl, etc.) and apps that force their own proxy settings can bypass it. |
 | VPNs | VPN clients that ignore the system proxy can bypass it. |
 | Existing browser connections | A tab that was already open may continue temporarily because browsers retain connections. Fully quit and reopen the browser to apply blocking to fresh connections. |
+| HTTPS block page | For HTTPS, the browser opens a proxy tunnel (CONNECT) first and never renders the body of a refused tunnel. Blocked HTTPS sites show the browser's default error instead of the block page; blocking itself works the same. The block page only appears for plain-HTTP sites. |
 | Port conflict | If another program occupies port 47471, blocked sites may show the browser's default error page instead. |
 
 Apple documents `MenuBarExtra` as a persistent menu bar control and notes that menu-bar-only utilities can use `LSUIElement` to remain out of the Dock and app switcher.[1] [2]

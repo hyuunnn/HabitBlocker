@@ -484,16 +484,31 @@ enum ProxyBlockService {
                 lines.append("\(networksetup) -setautoproxystate \(serviceArgument) \(entry.enabled ? "on" : "off")\(tolerate)")
             } else if restore[service] != nil {
                 lines.append("\(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
+                // 스위치만 끄면 우리 PAC URL이 설정에 남는다. 우리 것일 때만 URL도 비운다.
+                lines.append(contentsOf: ifOurPacLines(networksetup: networksetup,
+                                                       serviceArgument: serviceArgument,
+                                                       body: ["  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)"]))
             } else {
                 // 백업이 없으면 우리 PAC만 지운다. 다른 도구의 자동 프록시는 그대로 둔다.
-                lines.append("_hb_cur=$(\(networksetup) -getautoproxyurl \(serviceArgument) 2>/dev/null || true)")
-                lines.append("if echo \"$_hb_cur\" | /usr/bin/grep -qi \(AdminShell.shellQuoted("127.0.0.1:\(listenPort)")) && echo \"$_hb_cur\" | /usr/bin/grep -qi \(AdminShell.shellQuoted(pacPathPrefix)); then")
-                lines.append("  \(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
-                lines.append("  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)")
-                lines.append("fi")
+                lines.append(contentsOf: ifOurPacLines(networksetup: networksetup,
+                                                       serviceArgument: serviceArgument,
+                                                       body: [
+                                                           "  \(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)",
+                                                           "  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)",
+                                                       ]))
             }
         }
         return lines
+    }
+
+    /// 현재 자동 프록시가 우리 PAC일 때만 body 줄을 실행하는 if 블록을 만든다.
+    private static func ifOurPacLines(networksetup: String,
+                                      serviceArgument: String,
+                                      body: [String]) -> [String] {
+        [
+            "_hb_cur=$(\(networksetup) -getautoproxyurl \(serviceArgument) 2>/dev/null || true)",
+            "if echo \"$_hb_cur\" | /usr/bin/grep -qi \(AdminShell.shellQuoted("127.0.0.1:\(listenPort)")) && echo \"$_hb_cur\" | /usr/bin/grep -qi \(AdminShell.shellQuoted(pacPathPrefix)); then",
+        ] + body + ["fi"]
     }
 
     private static func pacApplyVerificationLines(services: [String]) -> [String] {
