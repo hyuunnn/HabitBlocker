@@ -427,7 +427,6 @@ enum ProxyBlockService {
         for service in services {
             guard let expected = backup[service] else {
                 if let actual = current[service],
-                   actual.enabled,
                    let url = actual.url,
                    isHabitBlockerPacURL(url) {
                     return false
@@ -442,8 +441,9 @@ enum ProxyBlockService {
                 if actual.enabled != expected.enabled {
                     return false
                 }
-            } else if actual.enabled {
-                return false
+            } else {
+                if actual.enabled { return false }
+                if let url = actual.url, isHabitBlockerPacURL(url) { return false }
             }
         }
         return true

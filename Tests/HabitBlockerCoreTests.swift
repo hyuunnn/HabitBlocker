@@ -217,7 +217,6 @@ enum HabitBlockerCoreTests {
         expect(disableScript.contains("-setautoproxystate 'Wi-Fi' on"), "백업이 있던 서비스는 이전 상태를 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxyurl 'Wi-Fi' 'http://127.0.0.1:18473/proxy.pac'"), "이전 PAC URL을 복원해야 합니다.")
         expect(disableScript.contains("-setautoproxystate 'Thunderbolt Bridge' off"), "사용 중이 아니던 설정은 꺼진 상태로 복원해야 합니다.")
-        expect(disableScript.contains("-setautoproxyurl 'Thunderbolt Bridge' ' '"), "URL이 없던 서비스에도 남은 우리 PAC URL은 지워야 합니다.")
         for service in ["Thunderbolt Bridge", "Ethernet"] {
             if let clearIndex = disableScript.range(of: "-setautoproxyurl '\(service)' ' '") {
                 expect(
@@ -280,6 +279,23 @@ enum HabitBlockerCoreTests {
         expect(
             !ProxyBlockService.settingsMatchBackup(current: leftoverOurs, backup: [:], services: ["Ethernet"]),
             "백업이 없는 서비스에 우리 PAC이 남아 있으면 실패여야 합니다."
+        )
+
+        let leftoverOursDisabled: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Ethernet": .init(url: "http://127.0.0.1:47471/proxy-abc.pac", enabled: false)
+        ]
+        expect(
+            !ProxyBlockService.settingsMatchBackup(current: leftoverOursDisabled, backup: [:], services: ["Ethernet"]),
+            "꺼져 있어도 우리 PAC URL이 남아 있으면 실패여야 합니다."
+        )
+
+        let leftoverOursBackedUp: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: "http://corp.example/proxy.pac", enabled: true),
+            "Thunderbolt Bridge": .init(url: "http://127.0.0.1:47471/proxy-abc.pac", enabled: false)
+        ]
+        expect(
+            !ProxyBlockService.settingsMatchBackup(current: leftoverOursBackedUp, backup: backup, services: ["Wi-Fi", "Thunderbolt Bridge"]),
+            "백업에 URL이 없던 서비스에도 우리 PAC URL이 남아 있으면 실패여야 합니다."
         )
         expect(
             ProxyBlockService.settingsMatchBackup(current: [:], backup: backup, services: ["USB LAN"]),
