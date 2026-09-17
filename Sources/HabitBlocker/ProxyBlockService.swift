@@ -485,16 +485,20 @@ enum ProxyBlockService {
             } else if restore[service] != nil {
                 lines.append("\(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)")
                 // 스위치만 끄면 우리 PAC URL이 설정에 남는다. 우리 것일 때만 URL도 비운다.
+                // setautoproxyurl은 자동 프록시를 다시 켜므로 off가 반드시 마지막이어야 한다.
                 lines.append(contentsOf: ifOurPacLines(networksetup: networksetup,
                                                        serviceArgument: serviceArgument,
-                                                       body: ["  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)"]))
+                                                       body: [
+                                                           "  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)",
+                                                           "  \(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)",
+                                                       ]))
             } else {
                 // 백업이 없으면 우리 PAC만 지운다. 다른 도구의 자동 프록시는 그대로 둔다.
                 lines.append(contentsOf: ifOurPacLines(networksetup: networksetup,
                                                        serviceArgument: serviceArgument,
                                                        body: [
-                                                           "  \(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)",
                                                            "  \(networksetup) -setautoproxyurl \(serviceArgument) ' '\(tolerate)",
+                                                           "  \(networksetup) -setautoproxystate \(serviceArgument) off\(tolerate)",
                                                        ]))
             }
         }
