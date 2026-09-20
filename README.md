@@ -10,7 +10,7 @@
 
 | Requirement | Details |
 |---|---|
-| Operating system | macOS 13 or later |
+| Operating system | macOS 14 or later |
 | Build tools | Xcode or Xcode Command Line Tools with Swift |
 | Permissions | An administrator password is required only when applying or removing system-wide blocking rules. |
 

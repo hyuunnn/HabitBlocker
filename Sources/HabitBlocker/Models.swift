@@ -56,8 +56,7 @@ enum DomainNormalizer {
     }
 
     private static func asciiHostname(_ host: String) -> String? {
-        // URL(string:)는 macOS 14부터 IDN을 ACE로 인코딩한다. 최소 지원은 13이므로
-        // URLComponents로 만든 URL.host를 쓴다.
+        // URLComponents로 만든 URL.host는 IDN을 ACE로 인코딩해 준다.
         var components = URLComponents()
         components.scheme = "https"
         components.host = host
