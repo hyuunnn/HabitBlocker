@@ -38,6 +38,11 @@ final class BlockerStore: ObservableObject {
     private let unlockDelayKey = "unlockDelaySeconds"
     private let activityEventsKey = "habitActivityEvents"
     private var unlockWaitTask: Task<Void, Never>?
+    private var isRefreshing = false
+
+    private static let blockPrompt = "습관 차단기가 등록한 사이트를 차단하려고 합니다."
+    private static let unblockPrompt = "습관 차단기가 사이트 차단을 해제하려고 합니다."
+    private static let focusEndPrompt = "집중 시간이 끝나 습관 차단기가 사이트 차단을 해제하려고 합니다."
 
     var isUnlockPending: Bool {
         unlockReadyAt != nil
@@ -54,6 +59,12 @@ final class BlockerStore: ObservableObject {
 
     var isSessionLocked: Bool {
         isFocusActive || isUnlockPending
+    }
+
+    /// 집중 종료 시각이 지났는데 차단이 아직 켜져 있다. 해제 암호를 취소했거나 앱이 꺼져 있는 동안 끝난 경우다.
+    var isFocusExpired: Bool {
+        guard isBlocked, !isUnlockPending, let focusEndDate else { return false }
+        return focusEndDate <= Date()
     }
 
     var canQuit: Bool {
@@ -113,18 +124,24 @@ final class BlockerStore: ObservableObject {
         let savedDelay = UserDefaults.standard.integer(forKey: unlockDelayKey)
         unlockDelaySeconds = [30, 60, 300].contains(savedDelay) ? savedDelay : 60
 
+        // 첫 화면 상태를 정확히 잡도록 실행 시에는 동기로 읽는다. 메뉴를 열 때는 백그라운드에서 읽는다.
         isBlocked = ProxyBlockService.isBlockActive()
-        if isBlocked {
-            // 차단 중에 앱을 다시 실행했다면 마지막 적용 목록으로 PAC을 즉시 복구한다.
-            ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
-            ProxyBlockService.startRejectListener()
-        }
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        if !isBlocked {
+        if isBlocked {
+            // 차단 중에 앱을 다시 실행했다면 마지막 적용 목록으로 PAC과 리스너를 즉시 복구한다.
+            restoreBlockingServer()
+        } else {
             clearUnlockWait()
             clearFocusSession()
         }
-        scheduleFocusEndIfNeeded()
+
+        if isFocusExpired {
+            // 앱이 꺼져 있는 동안 끝난 세션이다. 로그인 직후 설명 없이 암호 창을 띄우는 대신
+            // 차단을 유지한 채 메뉴에서 해제하도록 안내한다.
+            setStatus("앱이 꺼져 있는 동안 집중 시간이 끝났습니다. 차단을 해제하려면 '등록 사이트 차단'을 끄세요.", error: false)
+        } else {
+            scheduleFocusEndIfNeeded()
+        }
         scheduleUnlockWaitIfNeeded()
     }
 
@@ -246,6 +263,10 @@ final class BlockerStore: ObservableObject {
         performBlockUpdate(shouldBlock: true) { [weak self] succeeded in
             guard let self else { return }
             if succeeded {
+                // 암호 입력을 기다린 시간은 세션에 넣지 않는다. 차단이 실제로 켜진 시각부터 센다.
+                let blockedAt = Date()
+                self.focusStartedAt = blockedAt
+                self.focusEndDate = blockedAt.addingTimeInterval(TimeInterval(minutes * 60))
                 self.recordActivity(.focusStarted)
                 self.scheduleFocusEndIfNeeded()
                 if !self.statusIsError {
@@ -276,20 +297,30 @@ final class BlockerStore: ObservableObject {
     }
 
     func refreshSystemState() {
-        if isApplying { return }
-        isBlocked = ProxyBlockService.isBlockActive()
+        guard !isApplying, !isRefreshing else { return }
+        isRefreshing = true
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        if isBlocked {
-            // 설정만 남고 리스너가 없는 상태(수동 재활성 등)를 막기 위해 차단 중이면 항상 보증한다.
-            ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
-            ProxyBlockService.startRejectListener()
-        }
-        if isBlocked {
-            setStatus("시스템 프록시 규칙으로 등록 사이트가 차단되어 있습니다.", error: false)
-        } else {
-            clearUnlockWait()
-            clearFocusSession()
-            setStatus("현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
+
+        Task {
+            // networksetup을 여러 번 실행하므로 메뉴가 멈추지 않게 메인 스레드 밖에서 읽는다.
+            let active = await Task.detached(priority: .userInitiated) { ProxyBlockService.isBlockActive() }.value
+            isRefreshing = false
+            // 읽는 동안 적용이 시작됐으면 그쪽 결과가 더 최신이므로 이번 값은 버린다.
+            guard !isApplying else { return }
+
+            let changed = active != isBlocked
+            isBlocked = active
+            if active {
+                // 설정만 남고 리스너가 없는 상태(수동 재활성 등)를 막기 위해 차단 중이면 항상 보증한다.
+                restoreBlockingServer()
+            } else {
+                clearUnlockWait()
+                clearFocusSession()
+            }
+            // 직전 작업의 결과나 오류 문구를 지우지 않도록, 바깥에서 상태가 바뀐 경우에만 안내를 바꾼다.
+            if changed {
+                setStatus(active ? "시스템 프록시 규칙으로 등록 사이트가 차단되어 있습니다." : "현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
+            }
         }
     }
 
@@ -316,31 +347,46 @@ final class BlockerStore: ObservableObject {
         }
     }
 
-    private func performBlockUpdate(shouldBlock: Bool, completion: @escaping (Bool) -> Void = { _ in }) {
+    private func performBlockUpdate(shouldBlock: Bool,
+                                    prompt: String? = nil,
+                                    completion: @escaping (Bool) -> Void) {
         guard !isApplying else { return }
         isApplying = true
         setStatus("관리자 권한 확인을 기다리는 중입니다…", error: false)
         let domains = sites.map(\.domain)
+        let prompt = prompt ?? (shouldBlock ? Self.blockPrompt : Self.unblockPrompt)
 
         Task {
             do {
-                try await ProxyBlockService.apply(shouldBlock: shouldBlock, domains: domains)
+                try await ProxyBlockService.apply(shouldBlock: shouldBlock, domains: domains, prompt: prompt)
                 isBlocked = shouldBlock
                 isApplying = false
+                setStatus(shouldBlock ? "차단 규칙을 적용했습니다." : "차단을 해제했습니다.", error: false)
+                completion(true)
+                // 완료 콜백이 계획 종료 시각으로 집중 시간을 자를 수 있도록 세션 종료 시각은 콜백 뒤에 지운다.
                 if !shouldBlock {
                     focusEndDate = nil
                 }
-                if shouldBlock, !ProxyBlockService.isListenerRunning {
-                    setStatus("차단 규칙은 적용됐지만 로컬 응답 서버를 시작하지 못했습니다. 차단 사이트는 브라우저 기본 오류 화면으로 표시됩니다.", error: true)
-                } else {
-                    setStatus(shouldBlock ? "차단 규칙을 적용했습니다." : "차단을 해제했습니다.", error: false)
-                }
-                completion(true)
             } catch {
+                // 실패 뒤의 실제 상태를 메인 스레드 밖에서 읽는다. 다 읽을 때까지 적용 중 상태를 유지한다.
+                let active = await Task.detached(priority: .userInitiated) { ProxyBlockService.isBlockActive() }.value
+                isBlocked = active
                 isApplying = false
-                isBlocked = ProxyBlockService.isBlockActive()
                 setStatus("변경하지 못했습니다: \(error.localizedDescription)", error: true)
                 completion(false)
+            }
+        }
+    }
+
+    /// 시스템 설정은 우리 PAC을 가리키는데 리스너가 없으면 차단이 전혀 적용되지 않는다.
+    /// 마지막으로 적용한 목록으로 PAC을 다시 만들고 리스너를 띄운다. 포트를 잡지 못하면 그 사실을 알린다.
+    private func restoreBlockingServer() {
+        ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
+        Task {
+            do {
+                try await ProxyBlockService.ensureRejectListenerReady()
+            } catch {
+                setStatus("로컬 응답 서버(127.0.0.1:\(ProxyBlockService.listenPort))를 시작하지 못해 지금은 차단이 적용되지 않습니다. 이 포트를 쓰는 다른 프로그램을 종료한 뒤 메뉴를 다시 여세요.", error: true)
             }
         }
     }
@@ -365,7 +411,7 @@ final class BlockerStore: ObservableObject {
             return
         }
         if isBlocked {
-            performBlockUpdate(shouldBlock: false) { [weak self] succeeded in
+            performBlockUpdate(shouldBlock: false, prompt: Self.focusEndPrompt) { [weak self] succeeded in
                 guard let self, succeeded else { return }
                 self.recordElapsedFocus(as: .focusCompleted)
                 self.setStatus("집중 시간이 끝나 차단을 해제했습니다.", error: false)
@@ -417,7 +463,7 @@ final class BlockerStore: ObservableObject {
 
     private func recordElapsedFocus(as kind: HabitActivityKind) {
         guard let start = focusStartedAt else { return }
-        recordActivity(kind, minutes: FocusDuration.elapsedMinutes(from: start))
+        recordActivity(kind, minutes: FocusDuration.recordedMinutes(from: start, plannedEnd: focusEndDate))
         focusStartedAt = nil
     }
 

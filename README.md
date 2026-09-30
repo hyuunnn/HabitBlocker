@@ -10,7 +10,7 @@
 
 | Requirement | Details |
 |---|---|
-| Operating system | macOS 14 or later |
+| Operating system | macOS 14 or later (Apple silicon or Intel) |
 | Build tools | Xcode or Xcode Command Line Tools with Swift |
 | Permissions | An administrator password is required only when applying or removing system-wide blocking rules. |
 
@@ -30,16 +30,16 @@ open Build/HabitBlocker.app
 
 The app appears as a shield icon in the macOS menu bar. Click the icon to open the popover.
 
-> On the first blocking change, macOS asks for an administrator password. HabitBlocker changes the network proxy auto-configuration and does not modify `/etc/hosts`.
+> Every blocking change asks for an administrator password, and the dialog shows HabitBlocker's own explanation of the change. HabitBlocker changes the network proxy auto-configuration and does not modify `/etc/hosts`.
 
 ## How to Use
 
 | Step | Action |
 |---|---|
 | 1 | Open the shield icon in the menu bar. |
-| 2 | Add a domain like `youtube.com` or paste a full URL in **Blocked Sites**. |
+| 2 | Add a domain like `youtube.com` or paste a full URL in **Blocked Sites** (`차단 목록`). |
 | 3 | Edit the list only while blocking is off. The list locks once blocking is on. |
-| 4 | Turn **Block Registered Sites** on to apply the rule immediately. Turn it off to remove the rule immediately. |
+| 4 | Turn **Block Registered Sites** (`등록 사이트 차단`) on to apply the rule immediately. Turn it off to remove the rule immediately. |
 | 5 | Start a focus session only after blocking is off. When ending a session, finish the unlock wait before confirming. |
 
 The standard block toggle is immediate. The unlock wait applies only when ending a focus session. The app cannot quit while blocking or a focus session is on.
@@ -68,7 +68,7 @@ The standard block toggle is immediate. The unlock wait applies only when ending
 | Command | Purpose |
 |---|---|
 | `./Scripts/test.sh` | Compiles and runs deterministic core tests. |
-| `./Scripts/build.sh` | Creates and ad-hoc signs `Build/HabitBlocker.app`. |
+| `./Scripts/build.sh` | Creates a universal (Apple silicon and Intel) `Build/HabitBlocker.app` for the minimum macOS version in `Resources/Info.plist`, then ad-hoc signs it. |
 | `open Build/HabitBlocker.app` | Opens the locally built menu bar app. |
 
 ## Automated Tests
@@ -80,8 +80,13 @@ The core test suite covers the logic that can be safely verified without adminis
 | Domain normalization | URL host extraction, case normalization, IDN/punycode handling, and invalid-input rejection. |
 | Hostname encoding | Converts stored domains to ASCII/punycode hosts for PAC. |
 | PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, case/FQDN handling, and punycode (IDN) matching. |
-| Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output. |
-| Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and same-session rollback. |
+| Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output, extracts auto-proxy URLs, and recognizes HabitBlocker's own PAC URL. |
+| Admin script generation | Service-name quoting and escaping, per-service checks before clearing a PAC URL, previous proxy-setting restoration, and same-session rollback. |
+| Proxy backup and restore check | Keeps earlier settings when HabitBlocker's PAC is already on, saves the backup to a file and UserDefaults, and accepts an unblock only when each service matches its backup and no service keeps HabitBlocker's PAC. |
+| PAC request detection | Recognizes origin-form and absolute-form PAC requests, including query strings, and rejects CONNECT and ordinary requests. |
+| Focus time recording | Caps recorded minutes at the planned end, so sleep, time while the app was quit, or a late password entry is not counted. |
+| Admin prompt | Detects a cancelled password dialog by its AppleScript error number, removes osascript location prefixes from errors, and passes a custom dialog prompt. |
+| Local listener | Reports an occupied port as an error before any password prompt, and starts again once the port is free. |
 
 ## Project Structure
 
@@ -106,7 +111,7 @@ HabitBlocker is a lightweight behavior-change tool, not a security product. Bloc
 
 | Step | Description |
 |---|---|
-| 1 | The app builds a PAC script from the block list, and a loopback-only (127.0.0.1) listener serves that script. |
+| 1 | The app builds a PAC script from the block list, and a loopback-only (127.0.0.1) listener serves that script. Blocking is turned on only after this listener is confirmed ready. |
 | 2 | Each network service's proxy auto-configuration points at this PAC URL. Previous proxy settings are saved to disk before any change. If the new PAC cannot be verified, the same administrator script restores those settings. Unblock succeeds only after the previous settings are confirmed. |
 | 3 | The PAC routes only blocked domains to the local listener, which answers with a 403. Everything else connects directly (DIRECT). |
 | 4 | DNS and `/etc/hosts` are never used, so name resolution and local services stay intact. The worst case of a PAC misconfiguration is "blocking does not happen". |
@@ -117,12 +122,12 @@ Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before a
 
 | Limitation | Implication |
 |---|---|
-| App not running | The local listener that serves the PAC lives inside the app, so blocking is temporarily lifted while the app is fully quit. The settings remain in place and blocking resumes immediately on relaunch; focus timers are reconciled then too. Keep the menu bar app running for long blocking periods (launch-at-login is supported). |
+| App not running | The local listener that serves the PAC lives inside the app, so blocking is temporarily lifted while the app is fully quit. The settings remain in place and blocking resumes immediately on relaunch. If a focus session ended while the app was quit, blocking stays on after relaunch and the menu asks you to turn it off, instead of showing a password prompt at login. Keep the menu bar app running for long blocking periods (launch-at-login is supported). |
 | Clients that ignore the system proxy | Most browsers follow the system proxy, but some CLI tools (curl, etc.) and apps that force their own proxy settings can bypass it. |
 | VPNs | VPN clients that ignore the system proxy can bypass it. |
 | Existing browser connections | A tab that was already open may continue temporarily because browsers retain connections. Fully quit and reopen the browser to apply blocking to fresh connections. |
 | HTTPS block page | For HTTPS, the browser opens a proxy tunnel (CONNECT) first and never renders the body of a refused tunnel. Blocked HTTPS sites show the browser's default error instead of the block page; blocking itself works the same. The block page only appears for plain-HTTP sites. |
-| Port conflict | If another program occupies port 47471, blocked sites may show the browser's default error page instead. |
+| Port conflict | If another program occupies port 47471, HabitBlocker cannot serve its PAC file and browsers connect directly, so nothing would be blocked. HabitBlocker checks the port before asking for the password and refuses to turn blocking on. If the port is taken after a relaunch, the menu shows an error. |
 
 Apple documents `MenuBarExtra` as a persistent menu bar control and notes that menu-bar-only utilities can use `LSUIElement` to remain out of the Dock and app switcher.[1] [2]
 

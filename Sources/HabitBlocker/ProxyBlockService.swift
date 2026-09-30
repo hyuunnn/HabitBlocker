@@ -1,12 +1,14 @@
 import CryptoKit
 import Foundation
 import Network
+import os
 
 /// 시스템 프록시 자동 설정(PAC)으로 도메인을 차단하는 엔진. /etc/hosts는 읽거나 쓰지 않는다.
 ///
 /// 동작 방식:
 /// 1. 앱이 차단 도메인 목록으로 PAC 스크립트를 만들어 메모리에 보관하고,
 ///    로컬호스트 전용 리스너가 `http://127.0.0.1:<port>/proxy-<hash>.pac` 로 서빙한다.
+///    리스너가 준비되지 않으면 PAC을 받을 수 없어 차단이 전혀 적용되지 않으므로, 차단을 켜기 전에 준비를 확인한다.
 /// 2. PAC은 차단 도메인만 `PROXY 127.0.0.1:<port>` 로 보내고 나머지는 `DIRECT` 다.
 /// 3. 리스너는 차단 대상으로 온 요청(CONNECT/HTTP)에 403 차단 화면을 응답한다.
 /// 4. 네트워크 서비스의 프록시 자동 설정 URL은 networksetup으로 켜고 끈다(관리자 권한).
@@ -21,10 +23,15 @@ enum ProxyBlockService {
     private static let proxyBackupKey = "proxyAutoConfigBackup"
     private static let lastAppliedDomainsKey = "lastAppliedBlockDomains"
 
-    private static var listener: NWListener?
     private static let listenerQueue = DispatchQueue(label: "com.hyun.habitblocker.reject-listener")
-    private static let pacLock = NSLock()
-    private static var storedPacScript: String?
+    private static let listenerStartTimeout: TimeInterval = 3
+    /// 리스너는 메인 액터에서만 만들고 바꾼다. apply()는 메인 스레드 밖에서 돌기 때문에 여기서 직렬화한다.
+    @MainActor private static var listener: NWListener?
+    @MainActor private static var listenerStartup: Task<Void, Error>?
+    /// 리스너 큐에서 읽고 apply()에서 쓰므로 잠금으로 보호한다.
+    private static let storedPacScript = OSAllocatedUnfairLock<String?>(initialState: nil)
+    /// 관리자 스크립트가 적용 확인에 실패해 이전 설정을 되돌렸을 때 stderr에 남기는 표지.
+    static let rollbackMarker = "PAC apply was not verified; previous proxy settings were restored"
 
     struct ProxyBackupEntry: Codable, Equatable {
         let url: String?
@@ -34,7 +41,9 @@ enum ProxyBlockService {
     enum BlockServiceError: LocalizedError {
         case emptyDomainList
         case networkServicesUnavailable
+        case listenerUnavailable
         case applyNotVerified
+        case applyRolledBack
         case clearNotVerified
         case restoreNotVerified
 
@@ -44,8 +53,12 @@ enum ProxyBlockService {
                 return "차단할 도메인이 없습니다."
             case .networkServicesUnavailable:
                 return "네트워크 서비스 목록을 가져올 수 없습니다."
+            case .listenerUnavailable:
+                return "로컬 응답 서버(127.0.0.1:\(ProxyBlockService.listenPort))를 시작하지 못했습니다. 이 포트를 쓰는 다른 프로그램을 종료한 뒤 다시 시도하세요."
             case .applyNotVerified:
                 return "프록시 규칙 적용을 확인하지 못했습니다. 네트워크 서비스 구성이 바뀌지 않았는지 확인하고 다시 시도하세요."
+            case .applyRolledBack:
+                return "프록시 규칙 적용을 확인하지 못해 이전 프록시 설정으로 되돌렸습니다. 네트워크 서비스 구성이 바뀌지 않았는지 확인하고 다시 시도하세요."
             case .clearNotVerified:
                 return "차단 해제를 확인하지 못했습니다. 시스템 설정 > 네트워크 > 프록시에서 자동 프록시 구성 상태를 확인하세요. 이전 설정 백업은 유지되어 있습니다."
             case .restoreNotVerified:
@@ -96,9 +109,7 @@ enum ProxyBlockService {
     @discardableResult
     static func preparePacScript(domains: [String]) -> String {
         let script = pacScript(hostnames: DomainNormalizer.hostnames(for: domains))
-        pacLock.lock()
-        storedPacScript = script
-        pacLock.unlock()
+        storedPacScript.withLock { $0 = script }
         return pacURLString(for: script)
     }
 
@@ -137,16 +148,45 @@ enum ProxyBlockService {
 
     // MARK: - 로컬 리스너
 
-    @discardableResult
-    static func startRejectListener() -> Bool {
-        if listener != nil { return true }
-        guard let port = NWEndpoint.Port(rawValue: listenPort) else { return false }
+    /// 리스너가 127.0.0.1에서 연결을 받을 준비가 될 때까지 기다린다. 이미 준비돼 있으면 바로 돌아온다.
+    /// PAC 파일도 이 리스너가 서빙하므로 포트를 잡지 못하면 차단이 전혀 적용되지 않는다.
+    /// 그래서 실패를 성공으로 넘기지 않고 listenerUnavailable을 던진다.
+    @MainActor
+    static func ensureRejectListenerReady(port: UInt16 = listenPort) async throws {
+        if let listener, listener.state == .ready { return }
+        if let listenerStartup {
+            return try await listenerStartup.value
+        }
+
+        let startup = Task { @MainActor in try await startRejectListener(port: port) }
+        listenerStartup = startup
+        defer { listenerStartup = nil }
+        try await startup.value
+    }
+
+    @MainActor
+    static func stopRejectListener() {
+        listener?.cancel()
+        listener = nil
+    }
+
+    @MainActor
+    private static func startRejectListener(port: UInt16) async throws {
+        stopRejectListener()
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+            throw BlockServiceError.listenerUnavailable
+        }
 
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
-        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host("127.0.0.1"), port: port)
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host("127.0.0.1"), port: endpointPort)
 
-        guard let rejectListener = try? NWListener(using: parameters) else { return false }
+        let rejectListener: NWListener
+        do {
+            rejectListener = try NWListener(using: parameters)
+        } catch {
+            throw BlockServiceError.listenerUnavailable
+        }
 
         rejectListener.newConnectionHandler = { connection in
             connection.stateUpdateHandler = { state in
@@ -161,28 +201,42 @@ enum ProxyBlockService {
             prepareRejectionTimeout(connection)
         }
 
-        // 리스너가 나중에 죽으면 isListenerRunning이 거짓말을 하지 않도록 정리한다.
-        rejectListener.stateUpdateHandler = { [weak rejectListener] state in
-            if case .failed = state {
-                DispatchQueue.main.async {
-                    if listener === rejectListener {
-                        listener = nil
-                    }
-                }
+        // 포트를 이미 누가 쓰고 있으면 start 직후가 아니라 잠시 뒤 .failed로 알려 온다.
+        let startup = ListenerStartupSignal()
+        let listenerID = ObjectIdentifier(rejectListener)
+        rejectListener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                startup.finish(.success(()))
+            case .failed, .waiting, .cancelled:
+                startup.finish(.failure(BlockServiceError.listenerUnavailable))
+                // 준비 전이든 나중이든 죽은 리스너는 치워서 다음 호출이 새로 시작하게 한다.
+                Task { @MainActor in discardListener(listenerID) }
+            default:
+                break
             }
         }
 
-        rejectListener.start(queue: listenerQueue)
         listener = rejectListener
-        return true
+        rejectListener.start(queue: listenerQueue)
+        listenerQueue.asyncAfter(deadline: .now() + listenerStartTimeout) {
+            startup.finish(.failure(BlockServiceError.listenerUnavailable))
+        }
+
+        do {
+            try await startup.wait()
+        } catch {
+            discardListener(listenerID)
+            throw error
+        }
     }
 
-    static func stopRejectListener() {
-        listener?.cancel()
+    @MainActor
+    private static func discardListener(_ id: ObjectIdentifier) {
+        guard let current = listener, ObjectIdentifier(current) == id else { return }
+        current.cancel()
         listener = nil
     }
-
-    static var isListenerRunning: Bool { listener != nil }
 
     private static func prepareRejectionTimeout(_ connection: NWConnection) {
         // 요청 없이 연결만 유지하는 로컬 클라이언트를 정리한다. 응답 후 cancel은 멱등하다.
@@ -237,9 +291,7 @@ enum ProxyBlockService {
     }
 
     private static func currentPacScript() -> String? {
-        pacLock.lock()
-        defer { pacLock.unlock() }
-        return storedPacScript
+        storedPacScript.withLock { $0 }
     }
 
     private static func httpResponse(status: String, contentType: String, body: String) -> String {
@@ -328,9 +380,13 @@ enum ProxyBlockService {
         process.arguments = arguments
 
         let outputPipe = Pipe()
-        let errorPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        process.standardError = FileHandle.nullDevice
+
+        // waitUntilExit()는 끝날 때까지 현재 런루프를 돌려서 호출마다 수십 ms가 늘고,
+        // 메인 스레드에서는 다른 메인 큐 작업이 중간에 끼어든다. 종료 알림을 세마포어로 기다린다.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
 
         do {
             try process.run()
@@ -338,15 +394,15 @@ enum ProxyBlockService {
             return nil
         }
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        _ = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        exited.wait()
         guard process.terminationStatus == 0 else { return nil }
         return String(data: outputData, encoding: .utf8)
     }
 
     // MARK: - 차단 적용 / 해제
 
-    static func apply(shouldBlock: Bool, domains: [String]) async throws {
+    /// 차단을 켜거나 끈다. prompt는 관리자 암호 창에 표시해 무엇을 승인하는지 알려 준다.
+    static func apply(shouldBlock: Bool, domains: [String], prompt: String) async throws {
         let hostnames = DomainNormalizer.hostnames(for: domains)
         guard !shouldBlock || !hostnames.isEmpty else { throw BlockServiceError.emptyDomainList }
 
@@ -355,6 +411,10 @@ enum ProxyBlockService {
 
         if shouldBlock {
             let pacURLString = preparePacScript(domains: domains)
+            // PAC도 이 리스너가 서빙하므로, 포트를 못 잡으면 시스템 설정을 바꿔도 아무것도 차단되지 않는다.
+            // 암호를 묻기 전에 리스너가 실제로 준비됐는지 확인한다.
+            try await ensureRejectListenerReady()
+
             let backup = mergingProxyBackup(existing: readProxyBackup(), current: currentAutoProxyEntries(for: services))
             // 시스템 설정을 바꾸기 전에 먼저 남긴다. 적용이 중간에 실패해도 이전 PAC을 되돌릴 수 있다.
             saveProxyBackup(backup)
@@ -364,8 +424,7 @@ enum ProxyBlockService {
                 pacURLString: pacURLString,
                 restore: backup
             )
-            startRejectListener()
-            try await AdminShell.runPrivileged(script)
+            try await runAdminScript(script, prompt: prompt)
 
             guard isBlockActive() else { throw BlockServiceError.applyNotVerified }
             saveLastAppliedDomains(domains)
@@ -376,7 +435,7 @@ enum ProxyBlockService {
                 pacURLString: nil,
                 restore: backup
             )
-            try await AdminShell.runPrivileged(script)
+            try await runAdminScript(script, prompt: prompt)
 
             guard !isBlockActive() else { throw BlockServiceError.clearNotVerified }
             guard settingsMatchBackup(current: currentAutoProxyEntries(for: services), backup: backup, services: services) else {
@@ -384,7 +443,17 @@ enum ProxyBlockService {
             }
             clearProxyBackup()
             clearLastAppliedDomains()
-            stopRejectListener()
+            await stopRejectListener()
+        }
+    }
+
+    /// 관리자 스크립트를 실행한다. 스크립트가 적용 확인에 실패해 스스로 이전 설정을 되돌렸다면
+    /// osascript 원문 대신 그 사실을 알리는 오류로 바꾼다.
+    private static func runAdminScript(_ script: String, prompt: String) async throws {
+        do {
+            try await AdminShell.runPrivileged(script, prompt: prompt)
+        } catch AdminShellError.commandFailed(let message) where message.contains(rollbackMarker) {
+            throw BlockServiceError.applyRolledBack
         }
     }
 
@@ -400,7 +469,7 @@ enum ProxyBlockService {
             lines.append(contentsOf: pacApplyVerificationLines(services: services))
             lines.append("if [ \"$_hb_pac_ok\" -ne 1 ]; then")
             lines.append(contentsOf: proxyMutationLines(services: services, pacURLString: nil, restore: restore))
-            lines.append("echo 'PAC apply was not verified; previous proxy settings were restored' >&2")
+            lines.append("echo \(AdminShell.shellQuoted(rollbackMarker)) >&2")
             lines.append("exit 1")
             lines.append("fi")
         } else {
@@ -576,5 +645,39 @@ enum ProxyBlockService {
 
     static func clearLastAppliedDomains(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: lastAppliedDomainsKey)
+    }
+}
+
+/// 리스너 상태 콜백과 시간 초과 중 먼저 도착한 결과 하나만 기다리는 쪽에 전달한다.
+/// 결과가 wait()보다 먼저 와도 잃어버리지 않는다.
+private final class ListenerStartupSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: Result<Void, Error>?
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard outcome == nil else {
+            lock.unlock()
+            return
+        }
+        outcome = result
+        let waiter = continuation
+        continuation = nil
+        lock.unlock()
+        waiter?.resume(with: result)
+    }
+
+    func wait() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            lock.lock()
+            if let outcome {
+                lock.unlock()
+                continuation.resume(with: outcome)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
     }
 }

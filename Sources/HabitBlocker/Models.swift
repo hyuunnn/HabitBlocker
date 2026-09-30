@@ -35,6 +35,13 @@ enum FocusDuration {
     static func elapsedMinutes(from start: Date, to end: Date = Date()) -> Int {
         max(0, Int(end.timeIntervalSince(start) / 60))
     }
+
+    /// 요약에 기록할 집중 시간. 계획한 종료 시각 뒤의 시간(잠자기, 앱이 꺼져 있던 시간,
+    /// 해제 암호를 늦게 입력한 시간)은 세지 않는다.
+    static func recordedMinutes(from start: Date, plannedEnd: Date?, now: Date = Date()) -> Int {
+        let end = plannedEnd.map { min(now, $0) } ?? now
+        return elapsedMinutes(from: start, to: end)
+    }
 }
 
 enum DomainNormalizer {

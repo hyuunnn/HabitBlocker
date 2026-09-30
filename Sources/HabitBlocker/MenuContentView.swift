@@ -216,9 +216,7 @@ struct MenuContentView: View {
                         .disabled(store.sites.isEmpty || store.isApplying || store.isBlocked)
                 }
 
-                Text(store.isBlocked
-                     ? "집중 세션은 차단을 끈 뒤에 시작할 수 있습니다."
-                     : "빠른 시간을 고르거나 1~1,440분을 직접 입력하세요.")
+                Text(focusCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -306,6 +304,15 @@ struct MenuContentView: View {
             .keyboardShortcut("q")
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+
+    private var focusCaption: String {
+        if store.isFocusExpired {
+            return "집중 시간이 끝났습니다. 위의 '등록 사이트 차단'을 끄면 차단이 해제됩니다."
+        }
+        return store.isBlocked
+            ? "집중 세션은 차단을 끈 뒤에 시작할 수 있습니다."
+            : "빠른 시간을 고르거나 1~1,440분을 직접 입력하세요."
     }
 
     private var focusDuration: Int? {

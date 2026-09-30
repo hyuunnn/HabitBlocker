@@ -3,11 +3,13 @@ import Foundation
 import JavaScriptCore
 
 @main
+@MainActor
 enum HabitBlockerCoreTests {
     private static var failures = 0
 
-    static func main() {
+    static func main() async {
         testFocusElapsedMinutes()
+        testFocusRecordedMinutes()
         testDomainNormalization()
         testHostnameEncoding()
         testPacScriptGeneration()
@@ -19,6 +21,9 @@ enum HabitBlockerCoreTests {
         testRestoreSettingsMatch()
         testProxyBackupPersistence()
         testPacRequestDetection()
+        testAdminShellErrorClassification()
+        testPrivilegedScriptSource()
+        await testRejectListenerReadiness()
 
         if failures == 0 {
             print("✅ HabitBlocker core tests passed")
@@ -45,6 +50,23 @@ enum HabitBlockerCoreTests {
         expect(
             FocusDuration.elapsedMinutes(from: start, to: start.addingTimeInterval(-30)) == 0,
             "시작보다 이른 시각은 0분이어야 합니다."
+        )
+    }
+
+    private static func testFocusRecordedMinutes() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let plannedEnd = start.addingTimeInterval(25 * 60)
+        expect(
+            FocusDuration.recordedMinutes(from: start, plannedEnd: plannedEnd, now: start.addingTimeInterval(601 * 60)) == 25,
+            "계획 종료 뒤의 시간(잠자기, 앱 종료, 늦은 암호 입력)은 집중 시간에 넣지 않아야 합니다."
+        )
+        expect(
+            FocusDuration.recordedMinutes(from: start, plannedEnd: plannedEnd, now: start.addingTimeInterval(10 * 60)) == 10,
+            "계획 종료 전에 끝내면 실제로 지난 시간만 기록해야 합니다."
+        )
+        expect(
+            FocusDuration.recordedMinutes(from: start, plannedEnd: nil, now: start.addingTimeInterval(40 * 60)) == 40,
+            "계획 종료 시각이 없으면 지난 시간을 그대로 기록해야 합니다."
         )
     }
 
@@ -109,7 +131,13 @@ enum HabitBlockerCoreTests {
         expect(script.contains("PROXY 127.0.0.1:\(ProxyBlockService.listenPort)"), "차단 프록시 주소를 포함해야 합니다.")
         expect(script.contains("return \"DIRECT\""), "미등록 도메인은 직접 연결해야 합니다.")
         expect(script.contains("\"example.com\""), "등록 도메인을 포함해야 합니다.")
-        expect(!script.contains("\"localhost\"") && !script.contains("\"127.0.0.1\""), "루프백 주소는 차단 목록에서 제외해야 합니다.")
+
+        let withLoopback = ProxyBlockService.pacScript(hostnames: ["youtube.com", "localhost", "127.0.0.1", "0.0.0.0", "::1"])
+        expect(withLoopback.contains("\"youtube.com\""), "루프백과 함께 넣은 일반 도메인은 남아야 합니다.")
+        expect(
+            ["localhost", "127.0.0.1", "0.0.0.0", "::1"].allSatisfy { !withLoopback.contains("\"\($0)\"") },
+            "루프백 주소는 차단 목록에서 제외해야 합니다."
+        )
     }
 
     private static func testPacScriptMatching() {
@@ -192,17 +220,29 @@ enum HabitBlockerCoreTests {
             pacURLString: pacURL,
             restore: ["Wi-Fi": .init(url: previousPAC, enabled: true)]
         )
-        expect(enableScript.contains("set -e"), "적용 스크립트는 실패 시 중단해야 합니다.")
+        expect(enableScript.contains("set -e"), "예상치 못한 명령 실패에 대비해 적용 스크립트는 set -e로 시작해야 합니다.")
         expect(enableScript.contains("-setautoproxyurl 'Wi-Fi' '\(pacURL)'"), "서비스 이름을 안전하게 인용해 URL을 설정해야 합니다.")
         expect(enableScript.contains("-setautoproxystate 'Wi-Fi' on"), "자동 프록시를 켜야 합니다.")
         expect(enableScript.contains("'USB 10/100/1000 LAN'"), "공백이 있는 서비스 이름을 인용해야 합니다.")
         expect(enableScript.contains("'Hyun'\\''s LAN'"), "작은따옴표가 있는 서비스 이름을 이스케이프해야 합니다.")
         expect(!enableScript.contains("/etc/hosts"), "관리자 스크립트는 /etc/hosts를 건드리지 않아야 합니다.")
         expect(enableScript.contains("_hb_pac_ok"), "적용 후 우리 PAC이 켜졌는지 같은 스크립트에서 확인해야 합니다.")
-        expect(enableScript.contains("enabled: yes"), "적용 확인은 URL뿐 아니라 자동 프록시가 켜진 상태여야 한다.")
-        expect(enableScript.contains("/proxy-"), "적용 확인은 우리 PAC 경로를 포함해야 한다.")
+        // 적용 줄의 PAC URL에도 같은 문자열이 들어 있으므로, 확인 줄만 골라서 검사한다.
+        let verificationLines = enableScript
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { $0.hasPrefix("if echo \"$_hb_out\"") }
+        expect(verificationLines.count == 3, "적용 확인은 서비스마다 한 번씩 해야 합니다. 실제: \(verificationLines.count)")
+        expect(
+            verificationLines.allSatisfy {
+                $0.contains("'127.0.0.1:\(ProxyBlockService.listenPort)'")
+                    && $0.contains("'/proxy-'")
+                    && $0.contains("'enabled: yes'")
+            },
+            "적용 확인은 우리 리스너 주소, PAC 경로, 자동 프록시 켜짐을 모두 확인해야 합니다."
+        )
         expect(enableScript.contains(previousPAC), "적용 확인 실패 시 이전 PAC을 같은 권한 세션에서 되돌려야 합니다.")
-        expect(enableScript.contains("previous proxy settings were restored"), "롤백이 일어났음을 스크립트가 남겨야 합니다.")
+        expect(enableScript.contains(ProxyBlockService.rollbackMarker), "롤백이 일어났음을 앱이 알아볼 수 있게 스크립트가 표지를 남겨야 합니다.")
 
         let restore: [String: ProxyBlockService.ProxyBackupEntry] = [
             "Wi-Fi": .init(url: "http://127.0.0.1:18473/proxy.pac", enabled: true),
@@ -229,7 +269,27 @@ enum HabitBlockerCoreTests {
         }
         expect(disableScript.contains("-setautoproxystate 'Broken LAN' off"), "URL 없이 켜져 있던 비정상 설정은 꺼진 상태로 복원해야 합니다.")
         expect(!disableScript.contains("-setautoproxystate 'Broken LAN' on"), "URL 없는 설정을 켠 상태로 복원하면 안 됩니다.")
-        expect(disableScript.contains("127.0.0.1:\(ProxyBlockService.listenPort)"), "백업이 없는 서비스는 우리 PAC인지 확인한 뒤에만 지워야 합니다.")
+        // 백업이 없는 서비스(Ethernet)는 현재 값이 우리 PAC일 때만 지워야 한다. 다른 도구의 자동 프록시는 그대로 둔다.
+        let disableLines = disableScript.split(separator: "\n").map(String.init)
+        if let clearIndex = disableLines.firstIndex(where: { $0.contains("-setautoproxyurl 'Ethernet' ' '") }),
+           let ifIndex = disableLines[..<clearIndex].lastIndex(where: { $0.hasPrefix("if ") }),
+           ifIndex > 0,
+           let fiIndex = disableLines[clearIndex...].firstIndex(of: "fi") {
+            let query = disableLines[ifIndex - 1]
+            let condition = disableLines[ifIndex]
+            expect(
+                query.contains("-getautoproxyurl 'Ethernet'")
+                    && condition.contains("'127.0.0.1:\(ProxyBlockService.listenPort)'")
+                    && condition.contains("'/proxy-'"),
+                "백업이 없는 서비스의 URL 삭제는 그 서비스의 현재 값이 우리 PAC인지 확인하는 if 안에 있어야 합니다."
+            )
+            expect(
+                disableLines[ifIndex...fiIndex].allSatisfy { !$0.contains("'Wi-Fi'") && !$0.contains("'Broken LAN'") },
+                "우리 PAC 확인 블록은 해당 서비스만 다뤄야 합니다."
+            )
+        } else {
+            expect(false, "백업이 없는 서비스(Ethernet)의 조건부 URL 삭제 블록이 있어야 합니다.")
+        }
         expect(!disableScript.contains("-setautoproxystate 'Ethernet' on"), "백업이 없는 서비스를 켜면 안 됩니다.")
         expect(enableScript.contains("|| true"), "서비스 하나의 실패가 전체 적용을 중단시키지 않아야 합니다.")
         expect(!disableScript.contains("/etc/hosts"), "해제 스크립트도 /etc/hosts를 건드리지 않아야 합니다.")
@@ -264,13 +324,22 @@ enum HabitBlockerCoreTests {
             "백업과 같은 프록시 설정은 복원 성공으로 보아야 합니다."
         )
 
-        let missingPrevious: [String: ProxyBlockService.ProxyBackupEntry] = [
-            "Wi-Fi": .init(url: " ", enabled: false),
+        let urlMissing: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: " ", enabled: true),
             "Thunderbolt Bridge": .init(url: nil, enabled: false)
         ]
         expect(
-            !ProxyBlockService.settingsMatchBackup(current: missingPrevious, backup: backup, services: ["Wi-Fi", "Thunderbolt Bridge"]),
-            "이전 PAC URL이 비어 있으면 복원 실패여야 합니다."
+            !ProxyBlockService.settingsMatchBackup(current: urlMissing, backup: backup, services: ["Wi-Fi", "Thunderbolt Bridge"]),
+            "켜짐 상태가 같아도 이전 PAC URL이 비어 있으면 복원 실패여야 합니다."
+        )
+
+        let stateMismatch: [String: ProxyBlockService.ProxyBackupEntry] = [
+            "Wi-Fi": .init(url: "http://corp.example/proxy.pac", enabled: false),
+            "Thunderbolt Bridge": .init(url: nil, enabled: false)
+        ]
+        expect(
+            !ProxyBlockService.settingsMatchBackup(current: stateMismatch, backup: backup, services: ["Wi-Fi", "Thunderbolt Bridge"]),
+            "URL이 같아도 켜짐 상태가 다르면 복원 실패여야 합니다."
         )
 
         let leftoverOurs: [String: ProxyBlockService.ProxyBackupEntry] = [
@@ -308,10 +377,15 @@ enum HabitBlockerCoreTests {
     }
 
     private static func testProxyBackupPersistence() {
-        let defaultsSuite = "HabitBlockerProxyBackupTests-\(UUID().uuidString)"
-        let emptySuite = "HabitBlockerProxyBackupEmpty-\(UUID().uuidString)"
+        // 실행마다 새 suite 이름을 쓰면 ~/Library/Preferences에 빈 plist가 계속 쌓인다.
+        // (removePersistentDomain은 내용만 비우고, 파일을 지워도 cfprefsd가 나중에 다시 만든다.)
+        // 테스트 전용 고정 이름을 쓰고 시작과 끝에 비운다.
+        let defaultsSuite = "com.hyun.habitblocker.tests.proxy-backup"
+        let emptySuite = "com.hyun.habitblocker.tests.proxy-backup-empty"
         let defaults = UserDefaults(suiteName: defaultsSuite)!
         let emptyDefaults = UserDefaults(suiteName: emptySuite)!
+        defaults.removePersistentDomain(forName: defaultsSuite)
+        emptyDefaults.removePersistentDomain(forName: emptySuite)
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("HabitBlocker-proxy-backup-\(UUID().uuidString).json")
         defer {
@@ -370,6 +444,96 @@ enum HabitBlockerCoreTests {
             !ProxyBlockService.isPacRequest("garbage"),
             "형식이 맞지 않는 요청은 PAC 요청이 아니어야 합니다."
         )
+    }
+
+    private static func testAdminShellErrorClassification() {
+        expect(
+            AdminShellError.fromOsascriptOutput("0:17: execution error: 사용자가 취소함. (-128)\n") == .cancelled,
+            "암호 창 취소(-128)는 취소로 분류해야 합니다."
+        )
+        expect(
+            AdminShellError.fromOsascriptOutput("0:7484: execution error: User canceled. (-128)") == .cancelled,
+            "시스템 언어가 달라도 오류 번호로 취소를 알아봐야 합니다."
+        )
+        expect(
+            AdminShellError.fromOsascriptOutput("0:7484: execution error: \(ProxyBlockService.rollbackMarker) (1)")
+                == .commandFailed("\(ProxyBlockService.rollbackMarker) (1)"),
+            "그 밖의 실패는 osascript 위치 접두사만 떼고 원문과 오류 번호를 남겨야 합니다."
+        )
+        expect(
+            AdminShellError.fromOsascriptOutput("") == .commandFailed(""),
+            "오류 출력이 비어 있으면(osascript가 강제 종료된 경우) 기본 안내를 보여 줘야 합니다."
+        )
+        expect(
+            AdminShellError.cancelled.errorDescription?.contains("-128") == false,
+            "취소 안내에는 AppleScript 오류 번호가 보이지 않아야 합니다."
+        )
+    }
+
+    private static func testPrivilegedScriptSource() {
+        let source = AdminShell.privilegedScriptSource(
+            "echo \"hi\"",
+            prompt: "습관 차단기가 \"차단\"을 바꾸려고 합니다."
+        )
+        expect(source.hasPrefix("do shell script \"echo \\\"hi\\\"\""), "셸 명령은 AppleScript 문자열로 인용해야 합니다.")
+        expect(
+            source.contains("with prompt \"습관 차단기가 \\\"차단\\\"을 바꾸려고 합니다.\""),
+            "암호 창에 보일 안내 문구를 인용해 함께 넘겨야 합니다."
+        )
+        expect(source.hasSuffix("with administrator privileges"), "관리자 권한으로 실행해야 합니다.")
+    }
+
+    private static func testRejectListenerReadiness() async {
+        // 다른 프로그램이 포트를 점유한 상황. 앱 포트(47471)와 겹치지 않게 비어 있는 임시 포트를 쓴다.
+        guard let occupied = occupyLoopbackPort() else {
+            expect(false, "테스트용 루프백 포트를 잡지 못했습니다.")
+            return
+        }
+        let (occupier, port) = occupied
+
+        do {
+            try await ProxyBlockService.ensureRejectListenerReady(port: port)
+            expect(false, "포트가 점유되어 있으면 리스너 준비가 실패로 보고되어야 합니다.")
+        } catch {
+            expect(
+                (error as? ProxyBlockService.BlockServiceError) == .listenerUnavailable,
+                "포트 점유는 listenerUnavailable로 보고해야 합니다. 실제: \(error)"
+            )
+        }
+        close(occupier)
+
+        do {
+            try await ProxyBlockService.ensureRejectListenerReady(port: port)
+            try await ProxyBlockService.ensureRejectListenerReady(port: port)
+        } catch {
+            expect(false, "포트가 비면 리스너를 다시 시작할 수 있어야 합니다. 실제: \(error)")
+        }
+        ProxyBlockService.stopRejectListener()
+    }
+
+    /// 127.0.0.1의 빈 포트 하나를 SO_REUSEPORT 없는 일반 소켓으로 점유하고 (소켓, 포트)를 돌려준다.
+    private static func occupyLoopbackPort() -> (Int32, UInt16)? {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, length) }
+        }
+        let named = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        guard bound == 0, named == 0, listen(fd, 1) == 0 else {
+            close(fd)
+            return nil
+        }
+        return (fd, UInt16(bigEndian: address.sin_port))
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
