@@ -383,8 +383,8 @@ enum ProxyBlockService {
         process.standardOutput = outputPipe
         process.standardError = FileHandle.nullDevice
 
-        // waitUntilExit()는 끝날 때까지 현재 런루프를 돌려서 호출마다 수십 ms가 늘고,
-        // 메인 스레드에서는 다른 메인 큐 작업이 중간에 끼어든다. 종료 알림을 세마포어로 기다린다.
+        // 메인 스레드에서 waitUntilExit()를 쓰면 끝날 때까지 런루프를 돌려 호출마다 수십 ms가 늘고,
+        // 그사이 다른 메인 큐 작업이 끼어든다(백그라운드에서는 차이 없음). 종료 알림을 세마포어로 기다린다.
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
 

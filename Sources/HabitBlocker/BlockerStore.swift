@@ -43,6 +43,7 @@ final class BlockerStore: ObservableObject {
     private static let blockPrompt = "습관 차단기가 등록한 사이트를 차단하려고 합니다."
     private static let unblockPrompt = "습관 차단기가 사이트 차단을 해제하려고 합니다."
     private static let focusEndPrompt = "집중 시간이 끝나 습관 차단기가 사이트 차단을 해제하려고 합니다."
+    private static let listenerDownMessage = "로컬 응답 서버(127.0.0.1:\(ProxyBlockService.listenPort))를 시작하지 못해 지금은 차단이 적용되지 않습니다. 이 포트를 쓰는 다른 프로그램을 종료한 뒤 메뉴를 다시 여세요."
 
     var isUnlockPending: Bool {
         unlockReadyAt != nil
@@ -62,8 +63,9 @@ final class BlockerStore: ObservableObject {
     }
 
     /// 집중 종료 시각이 지났는데 차단이 아직 켜져 있다. 해제 암호를 취소했거나 앱이 꺼져 있는 동안 끝난 경우다.
+    /// 자동 해제 암호 창이 떠 있는 동안(isApplying)은 아직 해제 중이므로 제외한다.
     var isFocusExpired: Bool {
-        guard isBlocked, !isUnlockPending, let focusEndDate else { return false }
+        guard isBlocked, !isApplying, !isUnlockPending, let focusEndDate else { return false }
         return focusEndDate <= Date()
     }
 
@@ -257,6 +259,8 @@ final class BlockerStore: ObservableObject {
             return
         }
 
+        // 암호를 묻기 전에 세션을 먼저 저장해 둔다. 차단이 적용된 뒤 완료 콜백 전에 앱이 죽어도
+        // 다시 실행하면 일반 차단이 아니라 집중 세션으로 복원된다. 시각은 성공 뒤에 다시 맞춘다.
         let startedAt = Date()
         focusStartedAt = startedAt
         focusEndDate = startedAt.addingTimeInterval(TimeInterval(minutes * 60))
@@ -269,9 +273,7 @@ final class BlockerStore: ObservableObject {
                 self.focusEndDate = blockedAt.addingTimeInterval(TimeInterval(minutes * 60))
                 self.recordActivity(.focusStarted)
                 self.scheduleFocusEndIfNeeded()
-                if !self.statusIsError {
-                    self.setStatus("\(minutes)분 집중 세션을 시작했습니다.", error: false)
-                }
+                self.setStatus("\(minutes)분 집중 세션을 시작했습니다.", error: false)
                 self.showFocusNotification()
             } else {
                 self.clearFocusSession()
@@ -385,8 +387,14 @@ final class BlockerStore: ObservableObject {
         Task {
             do {
                 try await ProxyBlockService.ensureRejectListenerReady()
+                // 메뉴를 다시 열어 포트 충돌에서 회복했으면 남아 있는 리스너 오류만 지운다. 다른 문구는 건드리지 않는다.
+                if statusIsError, statusMessage == Self.listenerDownMessage {
+                    setStatus("시스템 프록시 규칙으로 등록 사이트가 차단되어 있습니다.", error: false)
+                }
             } catch {
-                setStatus("로컬 응답 서버(127.0.0.1:\(ProxyBlockService.listenPort))를 시작하지 못해 지금은 차단이 적용되지 않습니다. 이 포트를 쓰는 다른 프로그램을 종료한 뒤 메뉴를 다시 여세요.", error: true)
+                // 그사이 해제됐거나 다른 적용이 시작됐다면 더 최신 문구를 덮지 않는다.
+                guard isBlocked, !isApplying else { return }
+                setStatus(Self.listenerDownMessage, error: true)
             }
         }
     }

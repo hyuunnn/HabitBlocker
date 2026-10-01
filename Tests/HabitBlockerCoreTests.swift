@@ -377,21 +377,17 @@ enum HabitBlockerCoreTests {
     }
 
     private static func testProxyBackupPersistence() {
-        // 실행마다 새 suite 이름을 쓰면 ~/Library/Preferences에 빈 plist가 계속 쌓인다.
-        // (removePersistentDomain은 내용만 비우고, 파일을 지워도 cfprefsd가 나중에 다시 만든다.)
-        // 테스트 전용 고정 이름을 쓰고 시작과 끝에 비운다.
-        let defaultsSuite = "com.hyun.habitblocker.tests.proxy-backup"
-        let emptySuite = "com.hyun.habitblocker.tests.proxy-backup-empty"
-        let defaults = UserDefaults(suiteName: defaultsSuite)!
-        let emptyDefaults = UserDefaults(suiteName: emptySuite)!
-        defaults.removePersistentDomain(forName: defaultsSuite)
-        emptyDefaults.removePersistentDomain(forName: emptySuite)
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("HabitBlocker-proxy-backup-\(UUID().uuidString).json")
+        // suite 이름이 고정이면 test.sh를 동시에 돌릴 때 서로의 값을 지워 실패하고,
+        // 일반 이름에 UUID를 붙이면 ~/Library/Preferences에 빈 plist가 실행마다 쌓인다.
+        // 실행마다 만든 임시 디렉터리의 절대 경로를 suite 이름으로 써서 둘 다 피하고, 끝나면 디렉터리째 지운다.
+        let scratchDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HabitBlockerCoreTests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
+        let defaults = UserDefaults(suiteName: scratchDirectory.appendingPathComponent("proxy-backup").path)!
+        let emptyDefaults = UserDefaults(suiteName: scratchDirectory.appendingPathComponent("proxy-backup-empty").path)!
+        let fileURL = scratchDirectory.appendingPathComponent("proxy-backup.json")
         defer {
-            defaults.removePersistentDomain(forName: defaultsSuite)
-            emptyDefaults.removePersistentDomain(forName: emptySuite)
-            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: scratchDirectory)
         }
 
         let backup: [String: ProxyBlockService.ProxyBackupEntry] = [
