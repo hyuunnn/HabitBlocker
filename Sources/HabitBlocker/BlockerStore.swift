@@ -39,6 +39,7 @@ final class BlockerStore: ObservableObject {
     private let activityEventsKey = "habitActivityEvents"
     private var unlockWaitTask: Task<Void, Never>?
     private var isRefreshing = false
+    private var systemMutationVersion = 0
 
     private static let blockPrompt = "습관 차단기가 등록한 사이트를 차단하려고 합니다."
     private static let unblockPrompt = "습관 차단기가 사이트 차단을 해제하려고 합니다."
@@ -298,17 +299,19 @@ final class BlockerStore: ObservableObject {
         setStatus("차단 또는 집중 세션이 켜져 있을 때는 앱을 종료할 수 없습니다.", error: true)
     }
 
-    func refreshSystemState() {
-        guard !isApplying, !isRefreshing else { return }
+    @discardableResult
+    func refreshSystemState() -> Task<Void, Never>? {
+        guard !isApplying, !isRefreshing else { return nil }
         isRefreshing = true
+        let readVersion = systemMutationVersion
         launchAtLogin = SMAppService.mainApp.status == .enabled
 
-        Task {
+        return Task {
             // networksetup을 여러 번 실행하므로 메뉴가 멈추지 않게 메인 스레드 밖에서 읽는다.
             let active = await Task.detached(priority: .userInitiated) { ProxyBlockService.isBlockActive() }.value
             isRefreshing = false
-            // 읽는 동안 적용이 시작됐으면 그쪽 결과가 더 최신이므로 이번 값은 버린다.
-            guard !isApplying else { return }
+            // 조회 뒤 시작한 적용이 이미 끝났더라도, 그 이전 상태를 반영하지 않는다.
+            guard !isApplying, readVersion == systemMutationVersion else { return }
 
             let changed = active != isBlocked
             isBlocked = active
@@ -353,6 +356,7 @@ final class BlockerStore: ObservableObject {
                                     prompt: String? = nil,
                                     completion: @escaping (Bool) -> Void) {
         guard !isApplying else { return }
+        systemMutationVersion += 1
         isApplying = true
         setStatus("관리자 권한 확인을 기다리는 중입니다…", error: false)
         let domains = sites.map(\.domain)

@@ -84,7 +84,8 @@ The core test suite covers the logic that can be safely verified without adminis
 | Admin script generation | Service-name quoting and escaping, per-service checks before clearing a PAC URL, previous proxy-setting restoration, and same-session rollback. |
 | Proxy backup and restore check | Keeps earlier settings when HabitBlocker's PAC is already on, saves the backup to a file and UserDefaults, and accepts an unblock only when each service matches its backup and no service keeps HabitBlocker's PAC. |
 | PAC request detection | Recognizes origin-form and absolute-form PAC requests, including query strings, and rejects CONNECT and ordinary requests. |
-| Focus time recording | Caps recorded minutes at the planned end, so sleep, time while the app was quit, or a late password entry is not counted. |
+| Focus time recording | Caps recorded minutes at the planned end and records elapsed time for an early end. |
+| Store state refresh | Keeps completed blocking changes and saved focus sessions when an older status query returns, using test doubles without changing system settings. |
 | Admin prompt | Detects a cancelled password dialog by its AppleScript error number, removes osascript location prefixes from errors, and passes a custom dialog prompt. |
 | Local listener | Reports an occupied port as an error before any password prompt, and starts again once the port is free. |
 
