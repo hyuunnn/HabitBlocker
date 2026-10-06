@@ -19,6 +19,7 @@ swiftc \
   "$ROOT_DIR"/Sources/HabitBlocker/*.swift
 
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
+cp "$ROOT_DIR/Scripts/laya_resident.py" "$RESOURCES_DIR/laya_resident.py"
 codesign --force --deep --sign - "$APP_DIR" >/dev/null
 
 echo "생성 완료: $APP_DIR"

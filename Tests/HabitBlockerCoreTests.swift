@@ -19,8 +19,10 @@ enum HabitBlockerCoreTests {
         testRestoreSettingsMatch()
         testProxyBackupPersistence()
         testPacRequestDetection()
+        testFocusPolicy()
 
         if failures == 0 {
+            print("AI_POLICY_OK")
             print("✅ HabitBlocker core tests passed")
         } else {
             print("❌ \(failures) core test(s) failed")
@@ -370,6 +372,95 @@ enum HabitBlockerCoreTests {
             !ProxyBlockService.isPacRequest("garbage"),
             "형식이 맞지 않는 요청은 PAC 요청이 아니어야 합니다."
         )
+    }
+
+    private static func testFocusPolicy() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let urlOn = FocusPolicy.enforcement(aiEnabled: false, blockingEnabled: true)
+        expect(urlOn.applyPac && !urlOn.clearPac && !urlOn.judge, "AI off이고 차단이 켜지면 PAC만 적용해야 합니다.")
+
+        let urlOff = FocusPolicy.enforcement(aiEnabled: false, blockingEnabled: false)
+        expect(!urlOff.applyPac && urlOff.clearPac && !urlOff.judge, "차단이 꺼지면 PAC를 걷어야 합니다.")
+
+        let aiOn = FocusPolicy.enforcement(aiEnabled: true, blockingEnabled: true)
+        expect(!aiOn.applyPac && aiOn.clearPac && aiOn.judge, "AI on이면 목록 PAC 없이 판단만 해야 합니다.")
+
+        let aiRelaunch = FocusPolicy.enforcement(aiEnabled: true, blockingEnabled: true)
+        expect(!aiRelaunch.applyPac, "AI on으로 다시 켜도 PAC를 복구하지 않아야 합니다.")
+
+        expect(!FocusPolicy.canEditGoal(blockingEnabled: true), "차단 중에는 목표를 잠가야 합니다.")
+        expect(FocusPolicy.canEditGoal(blockingEnabled: false), "차단이 꺼지면 목표를 고칠 수 있어야 합니다.")
+
+        let unreadable = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: false,
+            driftProbability: 0.99,
+            driftSince: now.addingTimeInterval(-5),
+            now: now
+        )
+        expect(!unreadable.visible, "주소를 읽지 못하면 가리지 않아야 합니다.")
+
+        let missingModel = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: nil,
+            driftSince: now.addingTimeInterval(-5),
+            now: now
+        )
+        expect(!missingModel.visible && missingModel.driftSince == nil, "확률이 없으면 통과해야 합니다.")
+
+        let ambiguous = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: 0.79,
+            driftSince: now.addingTimeInterval(-5),
+            now: now
+        )
+        expect(!ambiguous.visible && ambiguous.driftSince == nil, "80% 미만이면 가리지 않아야 합니다.")
+
+        let justStarted = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: 0.80,
+            driftSince: nil,
+            now: now
+        )
+        expect(!justStarted.visible && justStarted.driftSince == now, "80%가 되어도 2초가 지나기 전에는 가리지 않아야 합니다.")
+
+        let held = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: 0.80,
+            driftSince: now.addingTimeInterval(-2),
+            now: now
+        )
+        expect(held.visible, "80%가 2초 유지되면 가려야 합니다.")
+
+        let dropped = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: 0.10,
+            driftSince: now.addingTimeInterval(-10),
+            now: now
+        )
+        expect(!dropped.visible && dropped.driftSince == nil, "다시 공부로 보면 가림을 걷고 이전 판단을 기억하지 않아야 합니다.")
+
+        let aiOffCover = FocusPolicy.cover(
+            aiEnabled: false,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: 1,
+            driftSince: now.addingTimeInterval(-10),
+            now: now
+        )
+        expect(!aiOffCover.visible, "AI off에서는 화면을 가리지 않아야 합니다.")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

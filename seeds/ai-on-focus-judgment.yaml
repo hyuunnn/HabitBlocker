@@ -1,0 +1,96 @@
+goal: "AI를 끄면 지금처럼 등록 URL만 PAC로 막고, AI를 켜면 PAC와 URL 목록 없이 로컬 laya-multilingual이 맨 앞 브라우저의 주소·제목 또는 다른 앱의 이름·창 제목과 한 줄 목표를 봐서, 딴짓 확률 80%가 2초간 유지될 때만 화면을 가린다. 애매하거나 실패하면 통과하고, 차단을 켜고 끄는 방식과 집중·해제 대기는 그대로 둔다."
+task_type: code
+constraints:
+  - "AI off blocks only hosts from the registered URL list through the existing PAC path."
+  - "When AI is off and blocking is on, relaunch restores that PAC."
+  - "AI on ignores the registered URL list and does not install or restore PAC, including after relaunch."
+  - "A browser is judged from its full URL, page title, and the one-line goal. Any frontmost browser counts."
+  - "A non-browser app is judged from its app name, window title, and the one-line goal."
+  - "An empty goal still produces a judgment from the remaining fields."
+  - "The goal text locks while blocking is on, the same way the URL list locks today."
+  - "The cover appears only when drift probability stays at or above 0.80 for 2 seconds."
+  - "Ambiguous output, a missing model, inference failure, or an unreadable address leaves the screen uncovered."
+  - "The cover lifts when the front context is no longer drift. Turning blocking off, focus sessions, unlock wait, and the quit lock stay as they are now."
+  - "Misclassifications are not stored. The same page is judged again every time."
+  - "The running blocker does not hardcode site or title rules. Sample labels belong only to the sample checker."
+  - "The in-menu picker downloads and runs the selected model locally. This version must run convaiinnovations/laya-multilingual. clef-flash and other sLLMs are not required to run yet."
+  - "Classification stays on this Mac. Activity text is not sent to a remote classifier."
+  - "Policy checks run in ./Scripts/test.sh. The four sample checks run in a separate script only when the model weights are present, with goal text 공부: a YouTube Shorts page is drift, a lecture title is study, a code editor is study, and a game is drift."
+brownfield_context:
+  project_type: brownfield
+  context_references:
+    - path: /Users/hyun/habitblocker
+      role: primary
+      summary: "macOS menu-bar app. PAC blocks registered hosts. Focus, unlock wait, and quit lock already exist. Core rules are tested by Scripts/test.sh."
+  existing_patterns:
+    - "PAC blocking and restore live in ProxyBlockService and must stay the AI-off path."
+    - "Core decisions are tested by compiling Sources logic with Tests/HabitBlockerCoreTests.swift via Scripts/test.sh, without admin rights."
+    - "The menu-bar SwiftUI popover is the control surface."
+  existing_dependencies:
+    - "Swift and the existing macOS menu-bar app. No new cloud classifier."
+acceptance_criteria:
+  - description: "AI off still blocks only registered URL hosts with PAC and restores that PAC on relaunch. AI on ignores the list, never installs or restores PAC, locks the goal while blocking is on, stores no corrections, and covers the screen only after drift probability stays at or above 0.80 for 2 seconds. Ambiguity, failure, or an unreadable address leaves the screen uncovered, and the existing focus, unlock-wait, and quit-lock flow still turns blocking off."
+    verify_command: "./Scripts/test.sh"
+    expected_artifacts: []
+    output_assertion: "AI_POLICY_OK"
+  - description: "With goal 공부, the separate sample check treats a YouTube Shorts page as drift, a lecture title as study, a code editor as study, and a game as drift when laya-multilingual weights are present, and skips without failing when the weights are absent."
+    verify_command: "Scripts/check-ai-samples.sh"
+    expected_artifacts:
+      - "Scripts/check-ai-samples.sh"
+    output_assertion: "AI_SAMPLES_OK"
+ontology_schema:
+  name: FocusJudgment
+  description: "Local decision of whether the frontmost context is study or drift, and whether the screen cover or PAC is active."
+  fields:
+    - name: aiEnabled
+      type: boolean
+      description: "AI on ignores the URL list and uses the local model. AI off uses PAC."
+      required: true
+    - name: blockingEnabled
+      type: boolean
+      description: "Existing block or focus session is armed. The cover is considered only while this is true."
+      required: true
+    - name: goal
+      type: string
+      description: "One-line goal. Empty is allowed. Locked while blocking is on."
+      required: true
+    - name: frontContext
+      type: object
+      description: "Browser full URL and title, or other app name and window title."
+      required: true
+    - name: selectedModel
+      type: string
+      description: "Model id chosen in the menu. The first runnable id is convaiinnovations/laya-multilingual."
+      required: true
+    - name: driftProbability
+      type: number
+      description: "Model probability that the front context is drift. Missing or failed inference does not cover."
+      required: false
+    - name: coverVisible
+      type: boolean
+      description: "True only after drift probability stays at or above 0.80 for 2 seconds while blocking is on."
+      required: true
+    - name: pacApplied
+      type: boolean
+      description: "True only for AI off while blocking is on. Never true while AI is on."
+      required: true
+evaluation_principles:
+  - name: same-host distinction
+    description: "The same host can be study or drift from the URL and title, without a coded host rule."
+    weight: 0.35
+  - name: fail open
+    description: "Uncertainty, failure, and unreadable context leave the user unblocked."
+    weight: 0.25
+  - name: existing block lifecycle
+    description: "Focus, unlock wait, quit lock, and AI-off PAC restore stay intact."
+    weight: 0.25
+  - name: local classification
+    description: "The judgment runs on this Mac and can later point at another downloaded model."
+    weight: 0.15
+exit_conditions:
+  - name: policy-and-samples-pass
+    description: "Stop when the policy test and the sample script both satisfy their output assertions."
+    criteria: "./Scripts/test.sh prints AI_POLICY_OK and Scripts/check-ai-samples.sh prints AI_SAMPLES_OK."
+metadata:
+  ambiguity_score: 0.16
+  interview_id: "conversation-habitblocker-ai-on"

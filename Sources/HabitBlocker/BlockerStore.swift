@@ -30,14 +30,25 @@ final class BlockerStore: ObservableObject {
     @Published private(set) var launchAtLogin = false
     @Published private(set) var statusMessage = ""
     @Published private(set) var statusIsError = false
+    @Published private(set) var aiEnabled = false
+    @Published private(set) var goal = ""
+    @Published private(set) var selectedModelID = FocusPolicy.defaultModelID
 
     private let sitesKey = "blockedSites"
+    private let aiEnabledKey = "aiEnabled"
+    private let goalKey = "focusGoal"
+    private let judgmentArmedKey = "judgmentArmed"
     private let focusEndKey = "focusEndDate"
     private let focusStartedKey = "focusStartedAt"
     private let unlockReadyKey = "unlockReadyAt"
     private let unlockDelayKey = "unlockDelaySeconds"
     private let activityEventsKey = "habitActivityEvents"
     private var unlockWaitTask: Task<Void, Never>?
+    private var judgeTask: Task<Void, Never>?
+    private var inferenceTask: Task<Void, Never>?
+    private var driftSince: Date?
+    private var judgedIdentity: String?
+    private let cover = CoverWindowController()
 
     var isUnlockPending: Bool {
         unlockReadyAt != nil
@@ -67,6 +78,9 @@ final class BlockerStore: ObservableObject {
         }
         if isFocusActive {
             return "집중 세션이 진행 중입니다"
+        }
+        if aiEnabled {
+            return isBlocked ? "맨 앞 화면을 보고, 딴짓이면 화면을 가립니다" : "AI 판단을 끄면 화면을 가리지 않습니다"
         }
         return isBlocked ? "등록한 도메인을 시스템 전체에서 차단합니다" : "현재 등록 사이트에 접근할 수 있습니다"
     }
@@ -112,12 +126,25 @@ final class BlockerStore: ObservableObject {
         unlockReadyAt = UserDefaults.standard.object(forKey: unlockReadyKey) as? Date
         let savedDelay = UserDefaults.standard.integer(forKey: unlockDelayKey)
         unlockDelaySeconds = [30, 60, 300].contains(savedDelay) ? savedDelay : 60
+        aiEnabled = UserDefaults.standard.bool(forKey: aiEnabledKey)
+        goal = UserDefaults.standard.string(forKey: goalKey) ?? ""
 
-        isBlocked = ProxyBlockService.isBlockActive()
-        if isBlocked {
-            // 차단 중에 앱을 다시 실행했다면 마지막 적용 목록으로 PAC을 즉시 복구한다.
-            ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
-            ProxyBlockService.startRejectListener()
+        if aiEnabled {
+            isBlocked = UserDefaults.standard.bool(forKey: judgmentArmedKey)
+            if isBlocked {
+                startJudging()
+            }
+            if ProxyBlockService.isBlockActive() {
+                let domains = sites.map(\.domain)
+                Task { try? await ProxyBlockService.apply(shouldBlock: false, domains: domains) }
+            }
+        } else {
+            isBlocked = ProxyBlockService.isBlockActive()
+            if isBlocked {
+                // 차단 중에 앱을 다시 실행했다면 마지막 적용 목록으로 PAC을 즉시 복구한다.
+                ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
+                ProxyBlockService.startRejectListener()
+            }
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if !isBlocked {
@@ -166,7 +193,7 @@ final class BlockerStore: ObservableObject {
             setStatus("집중 세션 중에는 차단을 직접 끄거나 켤 수 없습니다. 세션을 종료하세요.", error: true)
             return
         }
-        guard !shouldBlock || !sites.isEmpty else {
+        guard !shouldBlock || aiEnabled || !sites.isEmpty else {
             setStatus("먼저 차단할 사이트를 추가하세요.", error: true)
             return
         }
@@ -175,6 +202,35 @@ final class BlockerStore: ObservableObject {
             guard let self, succeeded, !shouldBlock else { return }
             self.recordElapsedFocus(as: .unblocked)
         }
+    }
+
+    func setGoal(_ newValue: String) {
+        guard FocusPolicy.canEditGoal(blockingEnabled: isBlocked) else {
+            setStatus("차단이 켜져 있을 때는 목표를 바꿀 수 없습니다.", error: true)
+            return
+        }
+        goal = newValue
+        UserDefaults.standard.set(newValue, forKey: goalKey)
+    }
+
+    func setAiEnabled(_ enabled: Bool) {
+        if isUnlockPending {
+            setStatus("진행 중인 해제 대기를 마친 뒤 판단 방식을 바꾸세요.", error: true)
+            return
+        }
+        if isApplying { return }
+        if !enabled && isBlocked && sites.isEmpty {
+            setStatus("URL 차단으로 바꾸려면 목록에 사이트가 있어야 합니다.", error: true)
+            return
+        }
+        guard aiEnabled != enabled else { return }
+        aiEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: aiEnabledKey)
+        guard isBlocked else {
+            stopJudging()
+            return
+        }
+        performBlockUpdate(shouldBlock: true)
     }
 
     func setUnlockDelay(seconds: Int) {
@@ -228,7 +284,7 @@ final class BlockerStore: ObservableObject {
     }
 
     func startFocus(minutes: Int) {
-        guard !sites.isEmpty else {
+        guard aiEnabled || !sites.isEmpty else {
             setStatus("집중 세션 전에 차단할 사이트를 추가하세요.", error: true)
             return
         }
@@ -277,8 +333,11 @@ final class BlockerStore: ObservableObject {
 
     func refreshSystemState() {
         if isApplying { return }
-        isBlocked = ProxyBlockService.isBlockActive()
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        if aiEnabled {
+            return
+        }
+        isBlocked = ProxyBlockService.isBlockActive()
         if isBlocked {
             // 설정만 남고 리스너가 없는 상태(수동 재활성 등)를 막기 위해 차단 중이면 항상 보증한다.
             ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
@@ -319,30 +378,131 @@ final class BlockerStore: ObservableObject {
     private func performBlockUpdate(shouldBlock: Bool, completion: @escaping (Bool) -> Void = { _ in }) {
         guard !isApplying else { return }
         isApplying = true
-        setStatus("관리자 권한 확인을 기다리는 중입니다…", error: false)
         let domains = sites.map(\.domain)
+        let plan = FocusPolicy.enforcement(aiEnabled: aiEnabled, blockingEnabled: shouldBlock)
+        let pacIsActive = ProxyBlockService.isBlockActive()
+        let needsAdmin = plan.applyPac || (plan.clearPac && pacIsActive)
 
+        if !needsAdmin {
+            finishLocalBlockUpdate(shouldBlock: shouldBlock, pacApplied: false)
+            completion(true)
+            return
+        }
+
+        setStatus("관리자 권한 확인을 기다리는 중입니다…", error: false)
         Task {
             do {
-                try await ProxyBlockService.apply(shouldBlock: shouldBlock, domains: domains)
-                isBlocked = shouldBlock
-                isApplying = false
-                if !shouldBlock {
-                    focusEndDate = nil
-                }
-                if shouldBlock, !ProxyBlockService.isListenerRunning {
-                    setStatus("차단 규칙은 적용됐지만 로컬 응답 서버를 시작하지 못했습니다. 차단 사이트는 브라우저 기본 오류 화면으로 표시됩니다.", error: true)
-                } else {
-                    setStatus(shouldBlock ? "차단 규칙을 적용했습니다." : "차단을 해제했습니다.", error: false)
-                }
+                try await ProxyBlockService.apply(shouldBlock: plan.applyPac, domains: domains)
+                finishLocalBlockUpdate(shouldBlock: shouldBlock, pacApplied: plan.applyPac)
                 completion(true)
             } catch {
                 isApplying = false
-                isBlocked = ProxyBlockService.isBlockActive()
+                if aiEnabled {
+                    isBlocked = UserDefaults.standard.bool(forKey: judgmentArmedKey)
+                } else {
+                    isBlocked = ProxyBlockService.isBlockActive()
+                }
                 setStatus("변경하지 못했습니다: \(error.localizedDescription)", error: true)
                 completion(false)
             }
         }
+    }
+
+    private func finishLocalBlockUpdate(shouldBlock: Bool, pacApplied: Bool) {
+        isBlocked = shouldBlock
+        UserDefaults.standard.set(aiEnabled && shouldBlock, forKey: judgmentArmedKey)
+        isApplying = false
+        if !shouldBlock {
+            focusEndDate = nil
+            stopJudging()
+        } else if aiEnabled {
+            startJudging()
+        } else {
+            stopJudging()
+        }
+        if shouldBlock, pacApplied, !ProxyBlockService.isListenerRunning {
+            setStatus("차단 규칙은 적용됐지만 로컬 응답 서버를 시작하지 못했습니다. 차단 사이트는 브라우저 기본 오류 화면으로 표시됩니다.", error: true)
+        } else if aiEnabled && shouldBlock {
+            setStatus("AI 판단을 켰습니다. 딴짓으로 보이면 화면을 가립니다.", error: false)
+        } else {
+            setStatus(shouldBlock ? "차단 규칙을 적용했습니다." : "차단을 해제했습니다.", error: false)
+        }
+    }
+
+    private func startJudging() {
+        judgeTask?.cancel()
+        judgeTask = Task { [weak self] in
+            guard let self else { return }
+            self.setStatus("로컬 모델을 준비하고 있습니다. 처음에는 런타임과 가중치를 받습니다.", error: false)
+            if let message = await LayaClassifier.prepare() {
+                if Task.isCancelled { return }
+                self.setStatus(message, error: true)
+            } else if !Task.isCancelled {
+                self.setStatus("모델을 올려 두었습니다. 딴짓으로 보이면 화면을 가립니다.", error: false)
+            }
+            while !Task.isCancelled {
+                await self.tickJudgment()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func stopJudging() {
+        judgeTask?.cancel()
+        judgeTask = nil
+        inferenceTask?.cancel()
+        inferenceTask = nil
+        driftSince = nil
+        judgedIdentity = nil
+        cover.setVisible(false)
+        LayaClassifier.stop()
+    }
+
+    private func tickJudgment() async {
+        guard aiEnabled, isBlocked else {
+            cover.setVisible(false)
+            return
+        }
+        let context = FrontContextReader.capture(promptForTrust: false)
+        guard context.addressReadable else {
+            driftSince = nil
+            judgedIdentity = nil
+            inferenceTask?.cancel()
+            cover.setVisible(false)
+            return
+        }
+
+        if context.identity != judgedIdentity {
+            judgedIdentity = context.identity
+            driftSince = nil
+            cover.setVisible(false)
+            inferenceTask?.cancel()
+            let identity = context.identity
+            let goal = self.goal
+            inferenceTask = Task { [weak self] in
+                let probability = await LayaClassifier.driftProbability(context: context, goal: goal)
+                guard let self, !Task.isCancelled, self.judgedIdentity == identity else { return }
+                let decision = FocusPolicy.cover(
+                    aiEnabled: true,
+                    blockingEnabled: true,
+                    addressReadable: true,
+                    driftProbability: probability,
+                    driftSince: nil,
+                    now: Date()
+                )
+                self.driftSince = decision.driftSince
+            }
+        }
+
+        let decision = FocusPolicy.cover(
+            aiEnabled: true,
+            blockingEnabled: true,
+            addressReadable: true,
+            driftProbability: driftSince == nil ? nil : FocusPolicy.driftThreshold,
+            driftSince: driftSince,
+            now: Date()
+        )
+        cover.setVisible(decision.visible)
     }
 
     private func scheduleFocusEndIfNeeded() {

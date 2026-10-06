@@ -12,6 +12,7 @@ struct MenuContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                judgmentControl
                 blockingControl
                 siteList
                 focusSession
@@ -20,7 +21,7 @@ struct MenuContentView: View {
             }
             .padding(16)
         }
-        .frame(width: 380, height: 650)
+        .frame(width: 380, height: 760)
         .onAppear {
             store.refreshSystemState()
         }
@@ -45,14 +46,47 @@ struct MenuContentView: View {
         }
     }
 
+    private var judgmentControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("AI로 판단", isOn: Binding(
+                get: { store.aiEnabled },
+                set: { store.setAiEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .disabled(store.isApplying || store.isUnlockPending)
+
+            TextField("한 줄 목표. 비어 있어도 판단합니다", text: Binding(
+                get: { store.goal },
+                set: { store.setGoal($0) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .disabled(store.isBlocked || store.isApplying)
+
+            Picker("분류 모델", selection: Binding(
+                get: { store.selectedModelID },
+                set: { _ in }
+            )) {
+                Text("laya-multilingual").tag(FocusPolicy.defaultModelID)
+            }
+            .disabled(store.isApplying)
+
+            Text(store.aiEnabled
+                 ? "목록은 보지 않습니다. 주소와 제목, 또는 앱 이름과 창 제목으로 판단합니다."
+                 : "끄면 등록한 URL만 막습니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var blockingControl: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("등록 사이트 차단", isOn: Binding(
+            Toggle(store.aiEnabled ? "AI 판단" : "등록 사이트 차단", isOn: Binding(
                 get: { store.isBlocked },
                 set: { store.setBlocked($0) }
             ))
             .toggleStyle(.switch)
-            .disabled(store.isApplying || store.isSessionLocked || (store.sites.isEmpty && !store.isBlocked))
+            .disabled(store.isApplying || store.isSessionLocked || (!store.aiEnabled && store.sites.isEmpty && !store.isBlocked))
 
             if store.isBlocked {
                 HStack(alignment: .top, spacing: 8) {
@@ -213,7 +247,7 @@ struct MenuContentView: View {
                         .foregroundStyle(.secondary)
 
                     Button("집중 시작", action: startFocus)
-                        .disabled(store.sites.isEmpty || store.isApplying || store.isBlocked)
+                        .disabled((store.sites.isEmpty && !store.aiEnabled) || store.isApplying || store.isBlocked)
                 }
 
                 Text(store.isBlocked
