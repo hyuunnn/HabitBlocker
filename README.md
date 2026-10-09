@@ -1,132 +1,74 @@
 # HabitBlocker
 
-> A macOS menu bar utility that adds friction to habitual website visits by blocking selected domains during focused work.
+A macOS menu bar app that blocks selected websites while you focus.
 
-**HabitBlocker** lets you add domains or URLs such as `youtube.com` or a YouTube video URL, then control blocking from the macOS menu bar. It supports quick and custom focus sessions, a deliberate unlock wait for focus sessions, local activity summaries, and optional focus notifications.
-
-[한국어 안내 보기](README_ko.md)
+[한국어](README_ko.md)
 
 ## Requirements
 
-| Requirement | Details |
-|---|---|
-| Operating system | macOS 14 or later |
-| Build tools | Xcode or Xcode Command Line Tools with Swift |
-| Permissions | An administrator password is required only when applying or removing system-wide blocking rules. |
+- macOS 14 or later.
+- Xcode or Xcode Command Line Tools with Swift to build from source.
+- Administrator authorization when applying or removing blocking rules.
 
-## Clone, Build, Test, and Run
-
-Clone this repository, make the scripts executable, run the core tests, build the app bundle, and open it.
+## Build and run
 
 ```zsh
-git clone https://github.com/hyuunnn/HabitBlocker.git
-cd HabitBlocker
-
-chmod +x Scripts/build.sh Scripts/test.sh
-./Scripts/test.sh
+git clone https://github.com/hyuunnn/habitblocker.git
+cd habitblocker
 ./Scripts/build.sh
 open Build/HabitBlocker.app
 ```
 
-The app appears as a shield icon in the macOS menu bar. Click the icon to open the popover.
+The app appears as a shield icon in the menu bar.
 
-> On the first blocking change, macOS asks for an administrator password. HabitBlocker changes the network proxy auto-configuration and does not modify `/etc/hosts`.
+## Usage
 
-## How to Use
+1. Open the menu bar icon and add a domain such as `youtube.com` or a URL to **차단 목록** (Blocked Sites). A URL is stored as a domain; blocking covers that domain and its subdomains, including all pages on them.
+2. Choose how to block:
 
-| Step | Action |
+   - **등록 사이트 차단** (Block Registered Sites): turn blocking on or off without an unlock wait.
+   - **집중 시작** (Start Focus): start a 25-, 45-, or 60-minute session, or enter 1–1,440 minutes. Blocking must be off before starting. When the timer ends, the app attempts to remove the blocking rules.
+
+3. To end a focus session early, choose **종료** (End), wait for the selected delay, then confirm with **차단 해제** (Unblock). The delay options are 30 seconds, 1 minute, and 5 minutes.
+
+Administrator authorization may also be requested when the focus timer ends. If authorization is canceled or unblocking fails, blocking can remain. An unlock wait still requires confirmation even if the focus timer ends while you are waiting.
+
+The block list and unlock delay can be changed only while blocking is off. During a focus session or an unlock wait, the block toggle is disabled. The app's Quit command is unavailable while blocking or a session is active, or while rules are being applied.
+
+**오늘의 요약** (Today's Summary) shows focus starts, elapsed minutes recorded when a session finishes or blocking is removed, and unlock attempts. Activity records stay on this Mac, and older days' records are automatically removed.
+
+Enable **로그인 시 자동 실행** (Launch at Login) to start the app after sign-in. Focus notifications require macOS notification permission.
+
+![Example: add sites, start a session, and wait before ending it early](Assets/habitblocker-usage-flow-v2.png)
+
+## Blocking and limitations
+
+HabitBlocker uses macOS proxy auto-configuration (PAC). It replaces the enabled network services' automatic proxy configuration with a script served by the app at `127.0.0.1:47471`. Listed domains go to a local listener that rejects requests; other domains connect directly. `/etc/hosts` is never modified.
+
+The app saves the previous automatic proxy settings before changing them and attempts to restore them if PAC application cannot be verified. Unblocking restores those settings and succeeds only after restoration is verified.
+
+- Blocking applies to clients that follow the system proxy settings. Apps, command-line tools, or VPN configurations that ignore them can bypass it.
+- Existing browser connections may keep working temporarily. Quit and reopen the browser to test new connections.
+- Blocked HTTPS sites show the browser's connection error; the app's block page is available for HTTP.
+- Keep the app running. After a crash or forced quit, blocking is not guaranteed and proxy settings may remain. Relaunch the app to restore the local listener and manage blocking. A conflict on port `47471` can also prevent the listener from working.
+
+If unblocking fails, check the app's error message and the active network service's automatic proxy configuration in macOS System Settings. The app retains its proxy backup until restoration is verified.
+
+## Development
+
+```zsh
+./Scripts/test.sh
+```
+
+`Tests/HabitBlockerCoreTests.swift` runs without administrator authorization. It covers domain normalization (including internationalized domains), PAC matching and request parsing, network-service parsing, focus-time accounting, proxy backup and restoration, and administrator script generation.
+
+App code is in `Sources/HabitBlocker/`:
+
+| Files | Role |
 |---|---|
-| 1 | Open the shield icon in the menu bar. |
-| 2 | Add a domain like `youtube.com` or paste a full URL in **Blocked Sites**. |
-| 3 | Edit the list only while blocking is off. The list locks once blocking is on. |
-| 4 | Turn **Block Registered Sites** on to apply the rule immediately. Turn it off to remove the rule immediately. |
-| 5 | Start a focus session only after blocking is off. When ending a session, finish the unlock wait before confirming. |
+| `HabitBlockerApp.swift`, `MenuContentView.swift` | App entry point and menu bar UI. |
+| `BlockerStore.swift` | Blocking state, focus sessions, summaries, notifications, and local persistence. |
+| `Models.swift` | Domain normalization and data models. |
+| `ProxyBlockService.swift`, `AdminShell.swift` | PAC listener, proxy backup and restoration, and privileged commands. |
 
-The standard block toggle is immediate. The unlock wait applies only when ending a focus session. The app cannot quit while blocking or a focus session is on.
-
-## Usage Flow
-
-![HabitBlocker usage flow](Assets/habitblocker-usage-flow-v2.png)
-
-*Usage flow based on the current menu: set the list, start a focus session, then complete the unlock wait when ending it.*
-
-## Features
-
-| Feature | Behavior |
-|---|---|
-| Menu bar control | Manage status, block lists, focus sessions, unlock waits, and summaries from a single SwiftUI popover. |
-| Domain and URL input | Accepts domain names and full URLs, extracting the host safely. |
-| System-wide PAC blocking | Applies a proxy auto-config (PAC) rule that routes blocked domains to a local listener on 127.0.0.1. Never reads or writes `/etc/hosts`. |
-| Focus sessions | Can start only while blocking is off. Supports 25, 45, and 60 minute presets plus custom durations from 1 to 1,440 minutes. |
-| Unlock wait | Always shown under Focus. The 30-second, 1-minute, or 5-minute delay can be changed only while blocking is off, and applies only when ending a focus session. |
-| Local summary | Shows today’s focus starts, actual focused minutes, and unlock attempts. Activity data stays on this Mac and only today’s events are kept. |
-| Focus messages | Displays encouragement inside the app and can send a macOS notification when permission is granted. |
-| Launch at login | Uses the macOS login-item service to launch from the menu bar after sign-in. |
-
-## Development Commands
-
-| Command | Purpose |
-|---|---|
-| `./Scripts/test.sh` | Compiles and runs deterministic core tests. |
-| `./Scripts/build.sh` | Creates and ad-hoc signs `Build/HabitBlocker.app`. |
-| `open Build/HabitBlocker.app` | Opens the locally built menu bar app. |
-
-## Automated Tests
-
-The core test suite covers the logic that can be safely verified without administrator access:
-
-| Area | Covered behavior |
-|---|---|
-| Domain normalization | URL host extraction, case normalization, IDN/punycode handling, and invalid-input rejection. |
-| Hostname encoding | Converts stored domains to ASCII/punycode hosts for PAC. |
-| PAC generation and matching | Evaluates the PAC with JavaScriptCore to verify subdomain blocking, suffix false-positive prevention, case/FQDN handling, and punycode (IDN) matching. |
-| Network service parsing | Strips headers, errors, and disabled markers from `networksetup` output. |
-| Admin script generation | Service-name quoting and escaping, previous proxy-setting restoration, and same-session rollback. |
-
-## Project Structure
-
-| Path | Responsibility |
-|---|---|
-| `Sources/HabitBlocker/HabitBlockerApp.swift` | App entry point and menu bar scene. |
-| `Sources/HabitBlocker/MenuContentView.swift` | SwiftUI menu popover and visual components. |
-| `Sources/HabitBlocker/BlockerStore.swift` | Blocking state, focus sessions, summaries, notifications, and local persistence. |
-| `Sources/HabitBlocker/Models.swift` | Domain normalization plus blocking and activity data models. |
-| `Sources/HabitBlocker/ProxyBlockService.swift` | PAC generation and serving, local reject listener, system proxy apply and restore. |
-| `Sources/HabitBlocker/AdminShell.swift` | Wrapper for running privileged shell commands. |
-| `Tests/HabitBlockerCoreTests.swift` | Deterministic core-logic tests. |
-| `Scripts/build.sh` | Build and ad-hoc signing script. |
-| `Scripts/test.sh` | Core-test build and execution script. |
-| `Assets/habitblocker-usage-flow-v2.png` | Usage-flow visual shown in both README files. |
-
-## Blocking Method and Limitations
-
-HabitBlocker is a lightweight behavior-change tool, not a security product. Blocking uses the **system proxy auto-configuration (PAC)** mechanism and never reads or writes `/etc/hosts`.
-
-### How it works
-
-| Step | Description |
-|---|---|
-| 1 | The app builds a PAC script from the block list, and a loopback-only (127.0.0.1) listener serves that script. |
-| 2 | Each network service's proxy auto-configuration points at this PAC URL. Previous proxy settings are saved to disk before any change. If the new PAC cannot be verified, the same administrator script restores those settings. Unblock succeeds only after the previous settings are confirmed. |
-| 3 | The PAC routes only blocked domains to the local listener, which answers with a 403. Everything else connects directly (DIRECT). |
-| 4 | DNS and `/etc/hosts` are never used, so name resolution and local services stay intact. The worst case of a PAC misconfiguration is "blocking does not happen". |
-
-Browsers' secure DNS (DoH) is not a bypass: the PAC decides by hostname before any DNS query happens, so it is more robust against secure DNS than a hosts-file approach.
-
-### Limitations
-
-| Limitation | Implication |
-|---|---|
-| App not running | The local listener that serves the PAC lives inside the app, so blocking is temporarily lifted while the app is fully quit. The settings remain in place and blocking resumes immediately on relaunch; focus timers are reconciled then too. Keep the menu bar app running for long blocking periods (launch-at-login is supported). |
-| Clients that ignore the system proxy | Most browsers follow the system proxy, but some CLI tools (curl, etc.) and apps that force their own proxy settings can bypass it. |
-| VPNs | VPN clients that ignore the system proxy can bypass it. |
-| Existing browser connections | A tab that was already open may continue temporarily because browsers retain connections. Fully quit and reopen the browser to apply blocking to fresh connections. |
-| HTTPS block page | For HTTPS, the browser opens a proxy tunnel (CONNECT) first and never renders the body of a refused tunnel. Blocked HTTPS sites show the browser's default error instead of the block page; blocking itself works the same. The block page only appears for plain-HTTP sites. |
-| Port conflict | If another program occupies port 47471, blocked sites may show the browser's default error page instead. |
-
-Apple documents `MenuBarExtra` as a persistent menu bar control and notes that menu-bar-only utilities can use `LSUIElement` to remain out of the Dock and app switcher.[1] [2]
-
-## References
-
-[1]: https://developer.apple.com/documentation/swiftui/menubarextra "Apple Developer — MenuBarExtra"
-[2]: https://developer.apple.com/documentation/swiftui/menubarextrastyle "Apple Developer — MenuBarExtraStyle"
+`./Scripts/build.sh` creates and ad-hoc signs `Build/HabitBlocker.app`.
