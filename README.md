@@ -27,6 +27,7 @@ The app appears as a shield icon in the menu bar.
 2. Choose how to block:
 
    - **등록 사이트 차단** (Block Registered Sites): turn blocking on or off without an unlock wait.
+   - **AI로 내용 판단** (Judge With AI): off blocks every page on a listed domain. On leaves the site open and asks a local model whether the current tab is focus, neutral, or drift, using only its URL and title. A drift judgment closes that tab. Download, select, and delete models in **모델 설정** (Model Settings). The default is the laptop-sized 4-bit Clef-flash 9B (about 5.2 GB).
    - **집중 시작** (Start Focus): start a 25-, 45-, or 60-minute session, or enter 1–1,440 minutes. Blocking must be off before starting. When the timer ends, the app attempts to remove the blocking rules.
 
 3. To end a focus session early, choose **종료** (End), wait for the selected delay, then confirm with **차단 해제** (Unblock). The delay options are 30 seconds, 1 minute, and 5 minutes.
@@ -49,7 +50,8 @@ The app saves the previous automatic proxy settings before changing them and att
 
 - Blocking applies to clients that follow the system proxy settings. Apps, command-line tools, or VPN configurations that ignore them can bypass it.
 - Existing browser connections may keep working temporarily. Quit and reopen the browser to test new connections.
-- Blocked HTTPS sites show the browser's connection error; the app's block page is available for HTTP.
+- AI judgment reads only the front browser tab's URL and title, on this Mac. It does not capture the screen or send page text anywhere. Browsers that do not expose the URL are judged from the window title. Closing a tab needs Automation or Accessibility permission. An uncertain judgment leaves the tab open.
+- Blocked HTTPS sites show the browser's connection error; the app's block page is available for HTTP. That applies to URL blocking.
 - Keep the app running. After a crash or forced quit, blocking is not guaranteed and proxy settings may remain. Relaunch the app to restore the local listener and manage blocking. A conflict on port `47471` can also prevent the listener from working.
 
 If unblocking fails, check the app's error message and the active network service's automatic proxy configuration in macOS System Settings. The app retains its proxy backup until restoration is verified.
@@ -60,15 +62,15 @@ If unblocking fails, check the app's error message and the active network servic
 ./Scripts/test.sh
 ```
 
-`Tests/HabitBlockerCoreTests.swift` runs without administrator authorization. It covers domain normalization (including internationalized domains), PAC matching and request parsing, network-service parsing, focus-time accounting, proxy backup and restoration, and administrator script generation.
+`Tests/HabitBlockerCoreTests.swift` runs without administrator authorization. It covers domain normalization (including internationalized domains), PAC matching and request parsing, network-service parsing, focus-time accounting, proxy backup and restoration, administrator script generation, AI judgment parsing, and the local model catalog.
 
 App code is in `Sources/HabitBlocker/`:
 
 | Files | Role |
 |---|---|
-| `HabitBlockerApp.swift`, `MenuContentView.swift` | App entry point and menu bar UI. |
-| `BlockerStore.swift` | Blocking state, focus sessions, summaries, notifications, and local persistence. |
-| `Models.swift` | Domain normalization and data models. |
+| `HabitBlockerApp.swift`, `MenuContentView.swift`, `AISettingsView.swift` | App entry point, menu bar UI, and model settings. |
+| `BlockerStore.swift`, `FocusGuard.swift`, `BrowserActivity.swift` | Blocking state, focus sessions, and tab judgment. |
+| `Models.swift`, `FocusJudgment.swift`, `ModelCatalog.swift`, `LocalModelController.swift` | Domain normalization, judgment rules, and local model download and runtime. |
 | `ProxyBlockService.swift`, `AdminShell.swift` | PAC listener, proxy backup and restoration, and privileged commands. |
 
 `./Scripts/build.sh` creates and ad-hoc signs `Build/HabitBlocker.app`.

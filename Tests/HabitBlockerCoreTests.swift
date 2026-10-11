@@ -19,6 +19,8 @@ enum HabitBlockerCoreTests {
         testRestoreSettingsMatch()
         testProxyBackupPersistence()
         testPacRequestDetection()
+        testFocusJudgment()
+        testModelCatalog()
 
         if failures == 0 {
             print("✅ HabitBlocker core tests passed")
@@ -370,6 +372,125 @@ enum HabitBlockerCoreTests {
             !ProxyBlockService.isPacRequest("garbage"),
             "형식이 맞지 않는 요청은 PAC 요청이 아니어야 합니다."
         )
+    }
+
+    private static func testFocusJudgment() {
+        let lecture = FocusPolicy.parseModelOutput("{\"label\":\"focus\",\"confidence\":0.91}")
+        expect(lecture == FocusVerdict(label: .focus, confidence: 0.91), "정상 JSON을 집중 판정으로 읽어야 합니다.")
+
+        let fenced = """
+        설명은 생략합니다.
+        ```json
+        {"label":"DRIFT","confidence":86}
+        ```
+        """
+        let game = FocusPolicy.parseModelOutput(fenced)
+        expect(game == FocusVerdict(label: .drift, confidence: 0.86), "코드 펜스와 0~100 점수를 딴짓 판정으로 읽어야 합니다.")
+
+        let thought = "<think>게임을 보고 있다</think>{\"label\":\"drift\",\"confidence\":0.8}"
+        expect(
+            FocusPolicy.parseModelOutput(thought)?.label == .drift,
+            "생각 태그 뒤의 JSON을 읽어야 합니다."
+        )
+        expect(FocusPolicy.parseModelOutput("잘 모르겠습니다") == nil, "JSON이 아니면 판정을 만들지 않아야 합니다.")
+        expect(
+            FocusPolicy.shouldClose(verdict: FocusVerdict(label: .drift, confidence: 0.72), threshold: 0.72),
+            "기준과 같은 딴짓 확신은 탭을 닫아야 합니다."
+        )
+        expect(
+            !FocusPolicy.shouldClose(verdict: FocusVerdict(label: .drift, confidence: 0.71), threshold: 0.72),
+            "기준보다 낮은 딴짓 확신은 그대로 두어야 합니다."
+        )
+        expect(
+            !FocusPolicy.shouldClose(verdict: FocusVerdict(label: .focus, confidence: 0.99), threshold: 0.5),
+            "집중 판정은 확신이 높아도 닫지 않아야 합니다."
+        )
+        expect(
+            !FocusPolicy.shouldClose(verdict: FocusVerdict(label: .neutral, confidence: 1), threshold: 0.5),
+            "중립 판정은 닫지 않아야 합니다."
+        )
+
+        expect(
+            FocusPolicy.matchedDomain(isBrowser: true, pageURL: "https://www.youtube.com/watch?v=abc", title: "게임", domains: ["youtube.com"]) == "youtube.com",
+            "www 유튜브 주소는 등록 도메인과 맞아야 합니다."
+        )
+        expect(
+            FocusPolicy.matchedDomain(isBrowser: true, pageURL: "https://music.youtube.com/watch?v=abc", title: "노래", domains: ["youtube.com"]) == "youtube.com",
+            "유튜브 하위 도메인도 판단 대상이어야 합니다."
+        )
+        expect(
+            FocusPolicy.matchedDomain(isBrowser: true, pageURL: "https://notyoutube.com/watch", title: "게임 - YouTube", domains: ["youtube.com"]) == nil,
+            "주소가 다른 사이트면 제목에 YouTube가 있어도 판단하지 않아야 합니다."
+        )
+        expect(
+            FocusPolicy.matchedDomain(isBrowser: true, pageURL: nil, title: "스타크래프트 하이라이트 - YouTube", domains: ["youtube.com"]) == "youtube.com",
+            "주소가 없으면 제목 끝의 사이트 이름으로 판단 대상을 찾아야 합니다."
+        )
+        expect(
+            FocusPolicy.matchedDomain(isBrowser: true, pageURL: nil, title: "I mentioned youtube in the middle", domains: ["youtube.com"]) == nil,
+            "제목 중간의 단어는 사이트 일치로 보면 안 됩니다."
+        )
+        expect(
+            FocusPolicy.matchedDomain(isBrowser: false, pageURL: nil, title: "게임 - YouTube", domains: ["youtube.com"]) == nil,
+            "브라우저가 아니면 제목만으로 탭을 닫지 않아야 합니다."
+        )
+        expect(
+            FocusPolicy.matchedDomain(
+                isBrowser: true,
+                pageURL: "https://xn--bj0bj3i97fq8o5lq.com/watch",
+                title: "강의",
+                domains: ["한글도메인.com"]
+            ) == "한글도메인.com",
+            "punycode 주소도 등록된 국제화 도메인과 맞아야 합니다."
+        )
+        expect(FocusPolicy.looksLikeBrowser(bundleID: "com.google.Chrome", appName: "Google Chrome"), "Chrome은 브라우저로 봐야 합니다.")
+        expect(FocusPolicy.looksLikeBrowser(bundleID: "org.mozilla.firefox", appName: "Firefox"), "Firefox는 브라우저로 봐야 합니다.")
+        expect(!FocusPolicy.looksLikeBrowser(bundleID: "com.apple.TextEdit", appName: "TextEdit"), "편집기는 브라우저가 아니어야 합니다.")
+
+        let messages = FocusPolicy.messages(goal: "선형대수학 공부", appName: "Safari", pageURL: "https://youtube.com/watch?v=1", title: String(repeating: "강", count: 500))
+        expect(messages.user.contains("선형대수학 공부"), "판정 프롬프트에 지금 하려는 일이 들어가야 합니다.")
+        expect(messages.user.contains("주소: https://youtube.com/watch?v=1"), "판정 프롬프트에 페이지 주소가 들어가야 합니다.")
+        expect(!messages.user.contains(String(repeating: "강", count: 301)), "너무 긴 제목은 잘라야 합니다.")
+        expect(messages.system.contains("drift"), "판정 프롬프트가 딴짓 라벨을 포함해야 합니다.")
+
+        let chrome = BrowserScript.readSource(for: .chromium(appName: "Google Chrome"))
+        expect(chrome.contains("Google Chrome") && chrome.contains("active tab"), "Chrome은 활성 탭 주소를 읽어야 합니다.")
+        let safari = BrowserScript.closeSource(for: .safari(appName: "Safari"))
+        expect(safari.contains("current tab") && safari.contains("close"), "Safari는 현재 탭을 닫는 스크립트여야 합니다.")
+    }
+
+    private static func testModelCatalog() {
+        let recommended = ModelCatalog.specs.filter(\.recommended)
+        expect(recommended.count == 1 && recommended[0].id == "clef-flash-q4", "노트북 기본 모델은 Clef Flash 4비트 하나여야 합니다.")
+        expect(ModelCatalog.specs.count >= 2, "설정에서 고를 모델이 둘 이상이어야 합니다.")
+        expect(recommended[0].sizeText == "5.2GB", "기본 모델 크기를 5.2GB로 보여 줘야 합니다. 실제: \(recommended[0].sizeText)")
+        expect(ModelCatalog.serverPort != ProxyBlockService.listenPort, "모델 서버 포트는 차단 포트와 달라야 합니다.")
+
+        for spec in ModelCatalog.specs {
+            expect(spec.byteSize < 7_500_000_000, "\(spec.id)는 일반 노트북에 올리지 못할 만큼 큽니다.")
+            expect(spec.downloadURL.scheme == "https" && spec.downloadURL.host == "huggingface.co", "\(spec.id)는 Hugging Face HTTPS에서만 받아야 합니다.")
+            expect(!spec.name.contains("27"), "\(spec.name)은 27B 모델이면 안 됩니다.")
+        }
+
+        let arguments = ModelCatalog.serverArguments(modelPath: "/tmp/model.gguf", port: 47472)
+        expect(arguments.contains("127.0.0.1"), "모델 서버는 루프백에만 떠야 합니다.")
+        expect(arguments.contains("2048"), "컨텍스트는 노트북 메모리에 맞게 2048이어야 합니다.")
+        expect(arguments.contains("--cache-ram") && arguments.contains("0"), "8GB 프롬프트 캐시는 끄어야 합니다.")
+        expect(arguments.contains("--reasoning") && arguments.contains("off"), "판단 전에는 생각 모드를 꺼야 합니다.")
+        expect(arguments.contains("--no-webui"), "로컬 모델 웹 UI는 켜지 않아야 합니다.")
+        expect(arguments.contains("--cors-origins") && arguments.contains("localhost"), "모델 서버는 브라우저의 임의 사이트에서 호출되면 안 됩니다.")
+        expect(ModelCatalog.runtimeDownloadURL.scheme == "https" && ModelCatalog.runtimeDownloadURL.host == "github.com", "실행 엔진은 GitHub HTTPS에서 받아야 합니다.")
+
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("habitblocker-gguf-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        var bytes = Data("GGUF".utf8)
+        bytes.append(Data(repeating: 0, count: 196))
+        try? bytes.write(to: fileURL)
+        expect(ModelCatalog.isUsableModelFile(at: fileURL, expectedBytes: 200), "GGUF 헤더와 크기가 맞으면 모델 파일로 인정해야 합니다.")
+        let htmlURL = FileManager.default.temporaryDirectory.appendingPathComponent("habitblocker-html-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: htmlURL) }
+        try? Data("<!doctype html>".utf8).write(to: htmlURL)
+        expect(!ModelCatalog.isUsableModelFile(at: htmlURL, expectedBytes: 15), "HTML 응답은 모델 파일로 보면 안 됩니다.")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

@@ -13,6 +13,8 @@ swiftc \
   -parse-as-library \
   -o "$TEST_BINARY" \
   "$ROOT_DIR/Sources/HabitBlocker/Models.swift" \
+  "$ROOT_DIR/Sources/HabitBlocker/FocusJudgment.swift" \
+  "$ROOT_DIR/Sources/HabitBlocker/ModelCatalog.swift" \
   "$ROOT_DIR/Sources/HabitBlocker/AdminShell.swift" \
   "$ROOT_DIR/Sources/HabitBlocker/ProxyBlockService.swift" \
   "$ROOT_DIR/Tests/HabitBlockerCoreTests.swift"

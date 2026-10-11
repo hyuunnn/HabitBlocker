@@ -15,6 +15,7 @@ enum HabitActivityKind: String, Codable {
     case focusCompleted
     case unlockRequested
     case unblocked
+    case driftClosed
 }
 
 struct HabitActivity: Codable, Identifiable {

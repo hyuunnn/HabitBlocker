@@ -30,6 +30,22 @@ final class BlockerStore: ObservableObject {
     @Published private(set) var launchAtLogin = false
     @Published private(set) var statusMessage = ""
     @Published private(set) var statusIsError = false
+    @Published private(set) var aiEnabled = false {
+        didSet { UserDefaults.standard.set(aiEnabled, forKey: aiEnabledKey) }
+    }
+    @Published private(set) var aiGuardActive = false {
+        didSet { UserDefaults.standard.set(aiGuardActive, forKey: aiGuardKey) }
+    }
+    @Published private(set) var goal = FocusPolicy.defaultGoal {
+        didSet { UserDefaults.standard.set(goal, forKey: aiGoalKey) }
+    }
+    @Published private(set) var threshold = FocusPolicy.defaultThreshold {
+        didSet { UserDefaults.standard.set(threshold, forKey: aiThresholdKey) }
+    }
+    @Published private(set) var liveJudgment = ""
+
+    let models = LocalModelController()
+    private var guardLoop: FocusGuard?
 
     private let sitesKey = "blockedSites"
     private let focusEndKey = "focusEndDate"
@@ -37,6 +53,10 @@ final class BlockerStore: ObservableObject {
     private let unlockReadyKey = "unlockReadyAt"
     private let unlockDelayKey = "unlockDelaySeconds"
     private let activityEventsKey = "habitActivityEvents"
+    private let aiEnabledKey = "aiJudgmentEnabled"
+    private let aiGuardKey = "aiGuardActive"
+    private let aiGoalKey = "aiGoal"
+    private let aiThresholdKey = "aiConfidenceThreshold"
     private var unlockWaitTask: Task<Void, Never>?
 
     var isUnlockPending: Bool {
@@ -61,14 +81,26 @@ final class BlockerStore: ObservableObject {
     }
 
     var statusDescription: String {
-        if isApplying { return "시스템 설정을 변경하는 중" }
+        if isApplying {
+            return aiEnabled ? "로컬 모델을 준비하고 있습니다" : "시스템 설정을 변경하는 중"
+        }
         if isUnlockPending {
             return isUnlockReady ? "차단 해제를 최종 확인할 수 있습니다" : "차단 해제를 잠시 기다리는 중입니다"
         }
         if isFocusActive {
-            return "집중 세션이 진행 중입니다"
+            return aiGuardActive ? "집중 세션에서 페이지를 판단하고 있습니다" : "집중 세션이 진행 중입니다"
+        }
+        if aiGuardActive {
+            return "등록 사이트의 페이지를 이 Mac에서 판단합니다"
+        }
+        if aiEnabled {
+            return "AI가 켜져 있습니다. 차단을 시작하면 페이지마다 판단합니다"
         }
         return isBlocked ? "등록한 도메인을 시스템 전체에서 차단합니다" : "현재 등록 사이트에 접근할 수 있습니다"
+    }
+
+    var todayDriftCloseCount: Int {
+        activityEvents.filter { $0.kind == .driftClosed && Calendar.current.isDateInToday($0.timestamp) }.count
     }
 
     var encouragementMessage: String {
@@ -112,12 +144,28 @@ final class BlockerStore: ObservableObject {
         unlockReadyAt = UserDefaults.standard.object(forKey: unlockReadyKey) as? Date
         let savedDelay = UserDefaults.standard.integer(forKey: unlockDelayKey)
         unlockDelaySeconds = [30, 60, 300].contains(savedDelay) ? savedDelay : 60
+        aiEnabled = UserDefaults.standard.bool(forKey: aiEnabledKey)
+        aiGuardActive = UserDefaults.standard.bool(forKey: aiGuardKey)
+        if let savedGoal = UserDefaults.standard.string(forKey: aiGoalKey) {
+            goal = savedGoal
+        }
+        let savedThreshold = UserDefaults.standard.double(forKey: aiThresholdKey)
+        if (0.5...0.9).contains(savedThreshold) {
+            threshold = savedThreshold
+        }
 
         isBlocked = ProxyBlockService.isBlockActive()
         if isBlocked {
+            // URL 차단이 남아 있으면 AI 감시 플래그는 끈다. 두 엔진을 동시에 쓰지 않는다.
+            aiGuardActive = false
             // 차단 중에 앱을 다시 실행했다면 마지막 적용 목록으로 PAC을 즉시 복구한다.
             ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
             ProxyBlockService.startRejectListener()
+        } else if aiGuardActive && aiEnabled {
+            isBlocked = true
+            resumeAIGuard()
+        } else {
+            aiGuardActive = false
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if !isBlocked {
@@ -277,8 +325,15 @@ final class BlockerStore: ObservableObject {
 
     func refreshSystemState() {
         if isApplying { return }
-        isBlocked = ProxyBlockService.isBlockActive()
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        if aiGuardActive {
+            isBlocked = true
+            if !statusIsError {
+                setStatus("AI가 등록 사이트의 페이지를 판단하고 있습니다.", error: false)
+            }
+            return
+        }
+        isBlocked = ProxyBlockService.isBlockActive()
         if isBlocked {
             // 설정만 남고 리스너가 없는 상태(수동 재활성 등)를 막기 위해 차단 중이면 항상 보증한다.
             ProxyBlockService.preparePacScript(domains: ProxyBlockService.lastAppliedDomains() ?? sites.map(\.domain))
@@ -291,6 +346,26 @@ final class BlockerStore: ObservableObject {
             clearFocusSession()
             setStatus("현재 차단 규칙이 적용되어 있지 않습니다.", error: false)
         }
+    }
+
+    func setAIEnabled(_ enabled: Bool) {
+        if isBlocked || isApplying {
+            setStatus("AI 전환은 차단을 끈 뒤에 바꿀 수 있습니다.", error: true)
+            return
+        }
+        aiEnabled = enabled
+        setStatus(enabled
+                  ? "AI 판단을 켰습니다. 차단을 시작하면 페이지 내용으로 가릅니다."
+                  : "URL 차단으로 돌아갔습니다. 등록한 도메인을 통째로 막습니다.",
+                  error: false)
+    }
+
+    func setGoal(_ value: String) {
+        goal = String(value.prefix(160))
+    }
+
+    func setThreshold(_ value: Double) {
+        threshold = min(0.9, max(0.5, value))
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -318,6 +393,15 @@ final class BlockerStore: ObservableObject {
 
     private func performBlockUpdate(shouldBlock: Bool, completion: @escaping (Bool) -> Void = { _ in }) {
         guard !isApplying else { return }
+        if shouldBlock && aiEnabled {
+            beginAIProtection(completion: completion)
+            return
+        }
+        if !shouldBlock && aiGuardActive {
+            isApplying = true
+            endAIProtection(completion: completion)
+            return
+        }
         isApplying = true
         setStatus("관리자 권한 확인을 기다리는 중입니다…", error: false)
         let domains = sites.map(\.domain)
@@ -475,7 +559,102 @@ final class BlockerStore: ObservableObject {
         }
     }
 
+    private func beginAIProtection(completion: @escaping (Bool) -> Void) {
+        guard models.selectedModelIsReady else {
+            setStatus("AI로 판단하려면 설정에서 모델을 먼저 받으세요.", error: true)
+            completion(false)
+            return
+        }
+        isApplying = true
+        setStatus("로컬 모델을 메모리에 올리고 있습니다…", error: false)
+        Task {
+            do {
+                try await models.ensureServer()
+                aiGuardActive = true
+                isBlocked = true
+                isApplying = false
+                startGuardLoop()
+                setStatus("AI 판단을 시작했습니다. 등록 사이트는 열어 두고, 딴짓인 탭만 닫습니다.", error: false)
+                completion(true)
+            } catch {
+                isApplying = false
+                aiGuardActive = false
+                setStatus("모델을 시작하지 못했습니다: \(error.localizedDescription)", error: true)
+                completion(false)
+            }
+        }
+    }
+
+    private func endAIProtection(completion: @escaping (Bool) -> Void) {
+        guardLoop?.stop()
+        models.stopServer()
+        aiGuardActive = false
+        isBlocked = false
+        isApplying = false
+        liveJudgment = ""
+        setStatus("AI 판단을 멈추고 사이트에 다시 접근할 수 있습니다.", error: false)
+        completion(true)
+    }
+
+    private func resumeAIGuard() {
+        startGuardLoop()
+        Task {
+            do {
+                try await models.ensureServer()
+                if liveJudgment.isEmpty {
+                    liveJudgment = "모델을 불러왔습니다. 등록 사이트를 열면 판단합니다."
+                }
+            } catch {
+                setStatus("AI 감시를 이어가려면 모델이 필요합니다. \(error.localizedDescription)", error: true)
+            }
+        }
+    }
+
+    private func startGuardLoop() {
+        let loop = guardLoop ?? FocusGuard(models: models)
+        guardLoop = loop
+        loop.start { [weak self] in
+            guard let self else {
+                return FocusWatchContext(domains: [], goal: FocusPolicy.defaultGoal, threshold: FocusPolicy.defaultThreshold)
+            }
+            return FocusWatchContext(domains: self.sites.map(\.domain), goal: self.goal, threshold: self.threshold)
+        } onUpdate: { [weak self] update in
+            self?.handleGuardUpdate(update)
+        }
+    }
+
+    private func handleGuardUpdate(_ update: FocusWatchUpdate) {
+        switch update {
+        case let .allowed(label, title, confidence):
+            let percent = Int((confidence * 100).rounded())
+            liveJudgment = "\(label)으로 두었습니다 · \(percent)% · \(title)"
+            if statusIsError {
+                setStatus("페이지 판단을 이어가고 있습니다.", error: false)
+            }
+        case let .closed(title, _):
+            recordActivity(.driftClosed)
+            liveJudgment = "딴짓이라 탭을 닫았습니다 · \(title)"
+            if statusIsError {
+                setStatus("딴짓 탭을 닫았습니다.", error: false)
+            }
+            postNotification(body: "딴짓으로 보여 \(title) 탭을 닫았습니다.")
+        case let .closeFailed(title):
+            liveJudgment = "딴짓으로 봤지만 탭을 닫지 못했습니다 · \(title)"
+            setStatus("브라우저 자동화 권한을 허용하면 그 탭을 닫을 수 있습니다.", error: true)
+        case let .modelProblem(message):
+            liveJudgment = "판단하지 못했습니다"
+            setStatus(message, error: true)
+        case .needsPermission:
+            liveJudgment = "탭을 읽지 못했습니다"
+            setStatus("브라우저 탭 주소를 읽지 못했습니다. 자동화 권한을 허용한 뒤 다시 열어 주세요.", error: true)
+        }
+    }
+
     private func showFocusNotification() {
+        postNotification(body: encouragementMessage)
+    }
+
+    private func postNotification(body: String) {
         Task {
             let center = UNUserNotificationCenter.current()
             var settings = await center.notificationSettings()
@@ -488,7 +667,7 @@ final class BlockerStore: ObservableObject {
 
             let content = UNMutableNotificationContent()
             content.title = "습관 차단기"
-            content.body = encouragementMessage
+            content.body = body
             content.sound = .default
             let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
             try? await center.add(request)

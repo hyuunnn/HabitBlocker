@@ -8,6 +8,7 @@ struct HabitBlockerApp: App {
         MenuBarExtra {
             MenuContentView()
                 .environmentObject(appDelegate.store)
+                .environmentObject(appDelegate.store.models)
         } label: {
             MenuBarIcon(store: appDelegate.store)
         }

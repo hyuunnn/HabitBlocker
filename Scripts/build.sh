@@ -15,6 +15,7 @@ swiftc \
   -O \
   -framework SwiftUI \
   -framework ServiceManagement \
+  -framework ApplicationServices \
   -o "$MACOS_DIR/HabitBlocker" \
   "$ROOT_DIR"/Sources/HabitBlocker/*.swift
 

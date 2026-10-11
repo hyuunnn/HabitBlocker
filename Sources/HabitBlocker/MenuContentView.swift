@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct MenuContentView: View {
     @EnvironmentObject private var store: BlockerStore
+    @EnvironmentObject private var models: LocalModelController
     @State private var newSite = ""
     @State private var selectedFocusMinutes = 25
     @State private var customFocusMinutes = ""
@@ -13,6 +14,7 @@ struct MenuContentView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 blockingControl
+                aiControl
                 siteList
                 focusSession
                 todaySummary
@@ -20,7 +22,7 @@ struct MenuContentView: View {
             }
             .padding(16)
         }
-        .frame(width: 380, height: 650)
+        .frame(width: 380, height: 720)
         .onAppear {
             store.refreshSystemState()
         }
@@ -33,7 +35,7 @@ struct MenuContentView: View {
                 .foregroundStyle(store.isBlocked ? Color.green : Color.secondary)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.isBlocked ? "차단 중" : "차단 해제")
+                Text(store.isBlocked ? (store.aiGuardActive ? "판단 중" : "차단 중") : "차단 해제")
                     .font(.headline)
                 Text(store.statusDescription)
                     .font(.caption)
@@ -111,12 +113,55 @@ struct MenuContentView: View {
         .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
     }
 
+    private var aiControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("AI로 내용 판단", isOn: Binding(
+                get: { store.aiEnabled },
+                set: { store.setAIEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .disabled(store.isBlocked || store.isApplying)
+
+            Text(store.aiEnabled
+                 ? "같은 사이트도 페이지마다 집중인지 딴짓인지 가립니다."
+                 : "끄면 등록한 도메인의 모든 페이지를 막습니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if store.aiEnabled {
+                Text(models.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !store.liveJudgment.isEmpty {
+                    Text(store.liveJudgment)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Button("모델 설정…") {
+                AISettingsWindow.open(store: store)
+            }
+            .help("모델 설정")
+            .accessibilityLabel("모델 설정")
+        }
+    }
+
     private var siteList: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
 
             Text("차단 목록")
                 .font(.headline)
+
+            if store.aiEnabled {
+                Text("AI가 켜져 있으면 이 목록은 통째로 막지 않고, 페이지마다 판단합니다.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack(spacing: 8) {
                 TextField("youtube.com 또는 링크 입력", text: $newSite)
@@ -268,6 +313,12 @@ struct MenuContentView: View {
                 MetricView(value: "\(store.todayFocusSessionCount)회", label: "집중 시작")
                 MetricView(value: "\(store.todayFocusMinutes)분", label: "집중 시간")
                 MetricView(value: "\(store.todayUnlockAttemptCount)회", label: "해제 시도")
+            }
+
+            if store.aiEnabled || store.todayDriftCloseCount > 0 {
+                Text("오늘 닫은 딴짓 탭 \(store.todayDriftCloseCount)개")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if let latestAttempt = store.latestUnlockAttempt {
